@@ -1,6 +1,6 @@
 """[DET] Arranca la app como lo hace un acceso directo y comprueba que responde.
 
-Existe por un fallo concreto: probe `Cuentero.exe` lanzandolo desde una consola,
+Existe por un fallo concreto: probe `Analista.exe` lanzandolo desde una consola,
 heredo un stdout valido y funciono. Desde el acceso directo NO hay consola,
 `sys.stdout` queda en None, uvicorn llama a `sys.stdout.isatty()` al configurar
 su registro y el servidor moria. La app se publico rota en dos equipos.
@@ -19,7 +19,7 @@ import time
 import urllib.request
 from pathlib import Path
 
-PUERTO = 8770
+PUERTO = 8756
 ESPERA = 90
 
 
@@ -35,7 +35,7 @@ def _matar() -> None:
     # OJO: nunca incluir `python` aqui. Este guion corre en python.exe y se
     # mataba a si mismo (salia con 255 sin decir nada). El servidor de la app
     # corre en pythonw.exe, que es el que hay que cerrar.
-    _powershell("Get-Process Cuentero,pythonw,llama-server "
+    _powershell("Get-Process Analista,pythonw "
                 "-EA SilentlyContinue | Stop-Process -Force")
     time.sleep(2)
 
@@ -51,7 +51,7 @@ def _responde() -> bool:
 
 
 def probar(carpeta: Path) -> bool:
-    exe = carpeta / "Cuentero.exe"
+    exe = carpeta / "Analista.exe"
     if not exe.exists():
         print(f"  [X] no encuentro {exe}")
         return False
@@ -88,9 +88,9 @@ def probar(carpeta: Path) -> bool:
     # unos segundos o se comprueba antes de que exista.
     for _ in range(20):
         ventana = _powershell(
-            "(Get-Process Cuentero -EA SilentlyContinue).MainWindowTitle")
-        if "Cuentero Infinito" in ventana:
-            print("  [OK] ventana 'Cuentero Infinito' abierta")
+            "(Get-Process Analista -EA SilentlyContinue).MainWindowTitle")
+        if "Analista" in ventana:
+            print("  [OK] ventana 'Analista' abierta")
             break
         time.sleep(1)
     else:
@@ -100,7 +100,7 @@ def probar(carpeta: Path) -> bool:
 
     consolas = _powershell(
         "$t = Get-CimInstance Win32_Process; "
-        "$app = ($t | Where-Object Name -eq 'Cuentero.exe').ProcessId; "
+        "$app = ($t | Where-Object Name -eq 'Analista.exe').ProcessId; "
         "($t | Where-Object { $_.Name -in @('cmd.exe','conhost.exe') -and "
         "$app -contains $_.ParentProcessId } | Measure-Object).Count")
     if consolas.strip() != "0":
