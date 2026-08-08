@@ -1,0 +1,21 @@
+[package]
+name = "analista"
+version = "0.1.0"
+edition = "2024"
+build = "build.rs"
+
+[dependencies]
+tao = "0.36.0"
+wry = "0.55.1"
+
+[build-dependencies]
+winresource = "0.1.31"
+
+# El ejecutable acompana a un modelo de varios GB: aqui lo que importa es que
+# arranque al instante y ocupe poco, no la velocidad de calculo.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

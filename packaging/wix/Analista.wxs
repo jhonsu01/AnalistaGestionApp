@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Instalador del Analista de Gestion Publica (WiX v4/v5).
+
+  Deliberadamente LIGERO: instala la aplicacion y su Python empotrado, pero NO
+  los datos. El corpus de informes de empalme son varios GB de documentos
+  publicos que cada usuario descarga por su cuenta; la app solo guarda la ruta
+  donde los tiene. Asi el MSI cabe holgado en una release de GitHub.
+
+  El acceso directo apunta a Analista.exe: una ventana WebView2 de unos cientos
+  de KB que arranca el servidor con el Python que viaja dentro. Nada de .bat, y
+  por tanto ninguna ventana negra de consola.
+
+  Instalacion perUser (LocalAppData): no pide permisos de administrador.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+
+  <Package Name="Analista de Gestion Publica"
+           Manufacturer="jhonsu01"
+           Version="$(var.Version)"
+           UpgradeCode="C4E1F2A8-9B33-4D57-8E62-1F7A04D9C3B5"
+           Scope="perUser"
+           Compressed="yes">
+
+    <!-- Cada instalacion sustituye a la anterior, sin dejar restos. -->
+    <MajorUpgrade DowngradeErrorMessage="Ya tienes instalada una version más reciente del Analista." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Icon Id="IconoApp" SourceFile="!(bindpath.recursos)\analista.ico" />
+    <Property Id="ARPPRODUCTICON" Value="IconoApp" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/jhonsu01/AnalistaGestionApp" />
+
+    <ui:WixUI Id="WixUI_InstallDir" />
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
+    <WixVariable Id="WixUILicenseRtf" Value="!(bindpath.recursos)\licencia.rtf" />
+
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="INSTALLFOLDER" Name="AnalistaGestion" />
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="CarpetaMenu" Name="Analista de Gestion" />
+    </StandardDirectory>
+    <StandardDirectory Id="DesktopFolder" />
+
+    <Feature Id="Principal" Title="Analista de Gestion Publica" Level="1">
+      <ComponentGroupRef Id="Aplicacion" />
+      <ComponentGroupRef Id="Accesos" />
+      <ComponentGroupRef Id="AccesoEscritorio" />
+    </Feature>
+  </Package>
+
+  <!-- Todo lo que la compilacion deja en dist/app -->
+  <Fragment>
+    <ComponentGroup Id="Aplicacion" Directory="INSTALLFOLDER">
+      <!-- $(var.AppDir) es una variable del PREPROCESADOR: se resuelve al
+           compilar, que es cuando se expande este glob. Con una de binder
+           (!(bindpath.x)) el patron queda literal, no casa con nada y WiX
+           genera un MSI VACIO sin avisar de nada. -->
+      <Files Include="$(var.AppDir)\**" />
+    </ComponentGroup>
+  </Fragment>
+
+  <Fragment>
+    <ComponentGroup Id="Accesos" Directory="CarpetaMenu">
+      <Component Id="AccesoDirecto" Guid="*">
+        <Shortcut Id="AccesoAnalista"
+                  Name="Analista de Gestion"
+                  Description="Consulta los informes de empalme del gobierno con IA local"
+                  Target="[INSTALLFOLDER]Analista.exe"
+                  WorkingDirectory="INSTALLFOLDER"
+                  Icon="IconoApp" />
+        <RemoveFolder Id="LimpiarMenu" On="uninstall" />
+        <RegistryValue Root="HKCU" Key="Software\jhonsu01\AnalistaGestion"
+                       Name="instalado" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <ComponentGroup Id="AccesoEscritorio" Directory="DesktopFolder">
+      <Component Id="IconoEscritorio" Guid="*">
+        <Shortcut Id="AccesoEscritorioAnalista"
+                  Name="Analista de Gestion"
+                  Description="Consulta los informes de empalme del gobierno con IA local"
+                  Target="[INSTALLFOLDER]Analista.exe"
+                  WorkingDirectory="INSTALLFOLDER"
+                  Icon="IconoApp" />
+        <RegistryValue Root="HKCU" Key="Software\jhonsu01\AnalistaGestion"
+                       Name="escritorio" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+</Wix>

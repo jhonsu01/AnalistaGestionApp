@@ -1,0 +1,259 @@
+name: Release
+
+# Cada avance en `main` publica una version nueva y RETIRA la anterior:
+# el repositorio muestra siempre una unica release, la vigente.
+#
+# Nota de diseno: los instaladores se suben con `gh release upload`, NO con
+# actions/upload-artifact, que consume la cuota de almacenamiento de la cuenta.
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "VERSION"          # el propio bump no debe re-disparar el workflow
+      - "**/*.md"
+      - "docs/**"
+  workflow_dispatch:
+    inputs:
+      salto:
+        description: "Parte de la version a subir"
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  # ────────────────────────────────────────────────────────────────
+  # 1. Numera la version, crea el tag y abre la release vacia
+  # ────────────────────────────────────────────────────────────────
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.calcular.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: calcular
+        shell: bash
+        run: |
+          actual=$(cat VERSION | tr -d '[:space:]')
+          IFS='.' read -r may min pat <<< "$actual"
+          case "${{ github.event.inputs.salto || 'patch' }}" in
+            major) may=$((may+1)); min=0; pat=0 ;;
+            minor) min=$((min+1)); pat=0 ;;
+            *)     pat=$((pat+1)) ;;
+          esac
+          nueva="$may.$min.$pat"
+          echo "$nueva" > VERSION
+          echo "version=$nueva" >> "$GITHUB_OUTPUT"
+          echo "::notice::Version $actual -> $nueva"
+
+      - name: Fijar la version y etiquetar
+        run: |
+          sed -i -E "s|badge/versión-[^-]+-38bdf8|badge/versión-${{ steps.calcular.outputs.version }}-38bdf8|" README.md || true
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add VERSION README.md
+          git commit -m "chore: version ${{ steps.calcular.outputs.version }} [skip ci]"
+          git tag "v${{ steps.calcular.outputs.version }}"
+          git push origin main --tags
+
+      - name: Abrir la release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          V: ${{ steps.calcular.outputs.version }}
+        run: |
+          {
+            echo "### Instalación"
+            echo
+            echo "| Plataforma | Archivo | Notas |"
+            echo "| ---------- | ------- | ----- |"
+            echo "| Windows | \`AnalistaGestion-$V.msi\` | Instala sin permisos de administrador |"
+            echo "| Android | \`analista-gestion-$V.apk\` | **Cliente WiFi**: se conecta al PC que ejecuta el Analista |"
+            echo
+            echo "**Antes de usarla** necesitas dos cosas que NO viajan en el instalador:"
+            echo
+            echo "1. Un servidor de modelos local (LM Studio, Ollama o llama-server)."
+            echo "2. El índice del corpus. Se genera con el pipeline de datos y se"
+            echo "   indica su carpeta en Ajustes."
+            echo
+            echo "El APK está firmado en modo depuración: Android pedirá permitir"
+            echo "\"orígenes desconocidos\" la primera vez."
+          } > notas.md
+          gh release create "v$V" --title "Analista de Gestión v$V" --notes-file notas.md --latest
+
+  # ────────────────────────────────────────────────────────────────
+  # 2. Instalador de Windows (MSI)
+  # ────────────────────────────────────────────────────────────────
+  windows:
+    needs: version
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main }
+
+      - name: Instalar WiX
+        run: |
+          dotnet tool install --global wix --version 5.0.2
+          # La extension DEBE ir a la par del toolset: sin fijar version, nuget
+          # instala la 7.x (para WiX v6) y `wix build` la rechaza.
+          wix extension add -g WixToolset.UI.wixext/5.0.2
+
+      - name: Preparar el contenido de la app
+        shell: bash
+        run: |
+          mkdir -p dist/app dist/out
+          cp -r execution web run_analista.py VERSION README.md LICENSE dist/app/
+          ls -la dist/app/
+
+      - name: Empotrar Python en la app
+        shell: bash
+        run: python execution/empotrar_python.py dist/app/python
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packaging/ventana
+
+      - name: Compilar la ventana de escritorio
+        shell: bash
+        run: |
+          cargo build --release --manifest-path packaging/ventana/Cargo.toml
+          cp packaging/ventana/target/release/analista.exe dist/app/Analista.exe
+          ls -la dist/app/Analista.exe
+
+      # Probar el .exe desde una consola NO vale: hereda un stdout valido y
+      # funciona. Lanzado desde un acceso directo no hay consola, uvicorn hace
+      # sys.stdout.isatty() y el servidor muere sin dejar rastro.
+      - name: Probar que la app arranca sin consola
+        shell: bash
+        run: python execution/probar_arranque.py dist/app
+
+      - name: Construir el MSI
+        shell: bash
+        run: |
+          wix build packaging/wix/Analista.wxs \
+            -define Version=${{ needs.version.outputs.version }} \
+            -define AppDir="$(pwd -W)/dist/app" \
+            -bindpath recursos=packaging/wix \
+            -ext WixToolset.UI.wixext \
+            -out "dist/out/AnalistaGestion-${{ needs.version.outputs.version }}.msi"
+          ls -la dist/out/
+
+      # El usuario no deberia descubrir en su equipo que falta algo: lo que se
+      # comprobaba a mano ahora bloquea la publicacion.
+      - name: Verificar que el MSI lleva la app dentro
+        shell: pwsh
+        run: |
+          $msi = Get-ChildItem dist/out/*.msi | Select-Object -First 1
+          $wi = New-Object -ComObject WindowsInstaller.Installer
+          $db = $wi.GetType().InvokeMember('OpenDatabase','InvokeMethod',$null,$wi,@($msi.FullName,0))
+          $v = $db.GetType().InvokeMember('OpenView','InvokeMethod',$null,$db,@('SELECT FileName FROM File'))
+          $v.GetType().InvokeMember('Execute','InvokeMethod',$null,$v,$null)
+          $nombres = @()
+          while ($true) {
+            $r = $v.GetType().InvokeMember('Fetch','InvokeMethod',$null,$v,$null)
+            if (-not $r) { break }
+            $n = $r.GetType().InvokeMember('StringData','GetProperty',$null,$r,@(1))
+            $nombres += ($n -split '\|')[-1]
+          }
+          Write-Output "Ficheros dentro del MSI: $($nombres.Count)"
+          if ($nombres.Count -lt 200) {
+            Write-Error "Solo $($nombres.Count) ficheros: falta la app o el Python empotrado."
+            exit 1
+          }
+          foreach ($pieza in @('Analista.exe','pythonw.exe','run_analista.py')) {
+            if ($nombres -notcontains $pieza) {
+              Write-Error "El MSI no incluye $pieza"
+              exit 1
+            }
+            Write-Output "  ok: $pieza"
+          }
+          if (-not ($nombres | Where-Object { $_ -like 'uvicorn*' })) {
+            Write-Error "Las dependencias de Python no viajan dentro del MSI"
+            exit 1
+          }
+          Write-Output "  ok: dependencias de Python empotradas"
+
+      - name: Subir el MSI a la release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "v${{ needs.version.outputs.version }}" dist/out/*.msi --clobber
+
+  # ────────────────────────────────────────────────────────────────
+  # 3. Cliente Android (APK)
+  # ────────────────────────────────────────────────────────────────
+  android:
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main }
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.11.1"
+
+      - name: Construir el APK
+        working-directory: android
+        run: gradle assembleDebug --no-daemon
+
+      - name: Renombrar con la version
+        run: |
+          mkdir -p dist/out
+          cp android/app/build/outputs/apk/debug/app-debug.apk \
+             "dist/out/analista-gestion-${{ needs.version.outputs.version }}.apk"
+          ls -la dist/out/
+
+      - name: Subir el APK a la release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "v${{ needs.version.outputs.version }}" dist/out/*.apk --clobber
+
+  # ────────────────────────────────────────────────────────────────
+  # 4. Comprobar que la release quedo completa y retirar las anteriores
+  # ────────────────────────────────────────────────────────────────
+  limpiar:
+    needs: [version, windows, android]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: La release debe traer los DOS instaladores
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          nueva="v${{ needs.version.outputs.version }}"
+          ficheros=$(gh release view "$nueva" --json assets --jq '.assets[].name')
+          echo "$ficheros"
+          echo "$ficheros" | grep -q '\.msi$' || { echo "::error::Falta el MSI"; exit 1; }
+          echo "$ficheros" | grep -q '\.apk$' || { echo "::error::Falta el APK"; exit 1; }
+
+      - name: Borrar releases y tags antiguos
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          nueva="v${{ needs.version.outputs.version }}"
+          for tag in $(gh release list --limit 100 --json tagName --jq '.[].tagName'); do
+            if [ "$tag" != "$nueva" ]; then
+              echo "Retirando $tag"
+              gh release delete "$tag" --yes --cleanup-tag || true
+            fi
+          done
+          echo "Releases vivas:"
+          gh release list

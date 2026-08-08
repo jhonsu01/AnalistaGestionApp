@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f172a">
+<title>Analista de Gestión Pública</title>
+<link rel="icon" href="icono.png">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<aside id="lateral">
+  <header class="lateral-cab">
+    <h1>Consultas</h1>
+    <button id="btn-nueva" class="primario" title="Nueva consulta">+ Nueva</button>
+  </header>
+
+  <div class="buscador">
+    <input id="buscar-historial" type="search" placeholder="Buscar en el historial…"
+           autocomplete="off" aria-label="Buscar en el historial">
+  </div>
+
+  <div class="filtros-rapidos">
+    <button class="chip activo" data-filtro="todas">Todas</button>
+    <button class="chip" data-filtro="fijadas">Fijadas</button>
+    <button class="chip" data-filtro="favoritas">Favoritas</button>
+  </div>
+
+  <nav id="lista-historial" aria-label="Historial de consultas"></nav>
+
+  <footer class="lateral-pie">
+    <button id="btn-ajustes" class="plano">Ajustes</button>
+    <span id="version-app" class="tenue"></span>
+  </footer>
+</aside>
+
+<main id="principal">
+  <div id="barra-estado" class="aviso oculto" role="status"></div>
+
+  <section id="zona-consulta">
+    <div class="filtros">
+      <select id="sel-sector" aria-label="Filtrar por sector">
+        <option value="">Todos los sectores</option>
+      </select>
+      <select id="sel-entidad" aria-label="Filtrar por entidad">
+        <option value="">Todas las entidades</option>
+      </select>
+      <label class="fragmentos">
+        Fragmentos
+        <input id="num-k" type="number" min="4" max="60" value="20" aria-label="Número de fragmentos">
+      </label>
+    </div>
+
+    <form id="form-consulta" autocomplete="off">
+      <textarea id="pregunta" rows="3" required
+        placeholder="¿Qué quieres saber? Por ejemplo: ¿qué reportó el ICBF sobre primera infancia?"
+        aria-label="Tu pregunta"></textarea>
+      <button type="submit" id="btn-preguntar" class="primario grande">Consultar</button>
+    </form>
+
+    <div id="sugerencias" class="sugerencias">
+      <button class="sugerencia">¿Qué reportó el ICBF sobre primera infancia?</button>
+      <button class="sugerencia">Estado de la red vial según INVÍAS</button>
+      <button class="sugerencia">Principales riesgos financieros reportados</button>
+      <button class="sugerencia">¿Qué proyectos quedaron pendientes en Minas y Energía?</button>
+    </div>
+  </section>
+
+  <section id="zona-respuesta" class="oculto">
+    <article id="respuesta" aria-live="polite"></article>
+
+    <div id="acciones" class="acciones oculto">
+      <button id="btn-favorita" class="plano">☆ Favorita</button>
+      <button id="btn-fijar" class="plano">Fijar</button>
+      <button id="btn-copiar" class="plano">Copiar</button>
+      <button id="btn-exportar" class="plano">Exportar .md</button>
+    </div>
+
+    <details id="caja-fuentes" class="fuentes">
+      <summary>Fuentes <span id="num-fuentes"></span></summary>
+      <ol id="lista-fuentes"></ol>
+    </details>
+  </section>
+</main>
+
+<dialog id="dlg-ajustes">
+  <form method="dialog" id="form-ajustes">
+    <h2>Ajustes</h2>
+
+    <label>Carpeta del corpus
+      <input id="aj-corpus" type="text" placeholder="D:\...\data\rag" spellcheck="false">
+      <small>Debe contener <code>embeddings.npy</code> y <code>metadatos.jsonl</code>.
+      Los datos no viajan con la app.</small>
+    </label>
+
+    <label>Servidor de modelos
+      <input id="aj-url" type="text" placeholder="http://localhost:1234/v1" spellcheck="false">
+      <small>LM Studio, Ollama o llama-server (API compatible con OpenAI).</small>
+    </label>
+
+    <label>Clave de API <span class="tenue">(si tu servidor la exige)</span>
+      <input id="aj-clave" type="password" placeholder="opcional" autocomplete="off">
+    </label>
+
+    <label>Modelo de respuesta
+      <input id="aj-modelo" type="text" placeholder="vacío = autodetectar" spellcheck="false">
+    </label>
+
+    <label>Modelo de embeddings
+      <input id="aj-embed" type="text" spellcheck="false">
+      <small>Debe ser el MISMO con el que se generó el índice.</small>
+    </label>
+
+    <div id="diag-ajustes" class="diag"></div>
+
+    <menu>
+      <button value="cancel" class="plano">Cerrar</button>
+      <button value="guardar" id="btn-guardar-ajustes" class="primario">Guardar</button>
+    </menu>
+  </form>
+</dialog>
+
+<script src="app.js"></script>
+</body>
+</html>

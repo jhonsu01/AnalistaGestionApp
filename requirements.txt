@@ -1,0 +1,5 @@
+starlette>=0.37
+uvicorn>=0.30
+anyio>=4.0
+numpy>=1.26
+turbovec>=0.8; platform_system != "Android"

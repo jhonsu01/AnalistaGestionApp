@@ -1,0 +1,50 @@
+# ---------------------------------------------------------------------------
+# DATOS: nunca entran al repositorio.
+# El corpus de informes de empalme son varios GB de documentos publicos.
+# La app solo guarda la RUTA donde el usuario los tenga.
+# ---------------------------------------------------------------------------
+data/
+datos/
+*.npy
+*.tv
+*.jsonl
+*.db
+*.sqlite3
+embeddings*
+metadatos*
+corpus*
+
+# Secretos
+.env
+*.key
+*.keystore
+*.jks
+
+# Entornos y temporales
+.venv/
+__pycache__/
+*.pyc
+.tmp/
+dist/
+build/
+
+# Rust
+packaging/ventana/target/
+
+# Android
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+*.apk
+*.aab
+
+# Windows
+*.msi
+*.wixpdb
+
+# Editores / sistema
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
