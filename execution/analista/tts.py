@@ -75,10 +75,10 @@ VOZ_POR_DEFECTO = "es_davefx"
 RITMOS = {
     "normal": {"nombre": "Normal", "length_scale": 1.0, "noise_w_scale": 0.8},
     "pausado": {"nombre": "Pausado", "length_scale": 1.25, "noise_w_scale": 0.95},
-    # Para ninos: muy lento y con mucha variacion de duracion por fonema, que es
-    # lo que se percibe como dramatismo al narrar.
+    # Muy lento y con mucha separacion entre silabas: para apuntar cifras
+    # mientras se escucha, que es cuando un numero mal oido cuesta caro.
     "respuesta": {
-        "nombre": "Cuento (para peques)",
+        "nombre": "Dictado (para anotar cifras)",
         "length_scale": 1.6,
         "noise_w_scale": 1.1,
     },
