@@ -57,12 +57,10 @@ async def vivo(request: Request) -> JSONResponse:
 
 
 async def estado(request: Request) -> JSONResponse:
-    voz = {"disponible": False, "voces": [], "motivo": "sin onnxruntime"}
-    if VOZ_DISPONIBLE:
-        try:
-            voz = {"disponible": True, **tts.estado_voz()}
-        except Exception as exc:  # noqa: BLE001
-            voz = {"disponible": False, "motivo": str(exc)[:120]}
+    # El MISMO bloque que sirve /api/voces: la pantalla de Ajustes se pinta con
+    # esta respuesta, y si aqui llegaran las voces sin filtrar volveria a
+    # ofrecer voces que no estan instaladas.
+    voz = bloque_voz()
 
     # `diagnostico()` pregunta al servidor de modelos por la red y es
     # BLOQUEANTE. Llamarlo directamente aqui paraba el bucle de eventos entero
@@ -103,28 +101,32 @@ async def probar(request: Request) -> JSONResponse:
     return JSONResponse(await anyio.to_thread.run_sync(llm.probar_conexion))
 
 
-async def voces(request: Request) -> JSONResponse:
-    """Voces instaladas y catalogo de las que se pueden descargar.
+def bloque_voz() -> dict:
+    """Voces instaladas + catalogo descargable, en un solo sitio.
+
+    Vive aparte porque lo necesitan DOS endpoints: `/api/voces` y `/api/estado`.
+    Cuando cada uno armaba su propia respuesta, `/api/estado` devolvia las
+    voces sin filtrar y sin catalogo, y como la pantalla de Ajustes se pinta
+    con `/api/estado`, el usuario veia "7 voces instaladas" teniendo una, podia
+    elegir cualquiera, y al reproducir sonaba otra distinta (la sintesis cae en
+    la unica instalada). Ademas el catalogo salia siempre como "no disponible".
 
     Las voces NO viajan en el instalador (pesan entre 28 y 114 MB cada una),
-    pero el usuario no deberia tener que abrir una consola para conseguirlas:
-    se descargan desde Ajustes con un clic.
+    pero nadie deberia abrir una consola para conseguirlas: se descargan desde
+    Ajustes con un clic.
     """
     if not VOZ_DISPONIBLE:
-        return JSONResponse(
-            {"disponible": False, "voces": [], "catalogo": [],
-             "detalle": "Falta onnxruntime en este equipo."}
-        )
+        return {"disponible": False, "voces": [], "catalogo": [],
+                "detalle": "Falta onnxruntime en este equipo."}
 
-    datos = {"disponible": True, "catalogo": []}
+    datos: dict = {"disponible": True, "catalogo": []}
     try:
         datos.update(tts.estado_voz())
     except Exception as exc:  # noqa: BLE001
         datos["detalle"] = str(exc)[:150]
 
-    # `estado_voz()` devuelve el CATALOGO de voces que la app sabe usar, cada
-    # una con su campo `instalada`. Solo las instaladas pueden sonar: si se
-    # ofrecen todas, el usuario elige una, pulsa Escuchar y no pasa nada.
+    # Solo las instaladas pueden sonar. Ofrecer las demas es prometer algo que
+    # no se cumple: el usuario la elige, pulsa Escuchar y suena otra voz.
     todas = datos.get("voces", [])
     datos["voces"] = [v for v in todas if v.get("instalada")]
     datos["conocidas"] = len(todas)
@@ -150,7 +152,11 @@ async def voces(request: Request) -> JSONResponse:
     except Exception as exc:  # noqa: BLE001
         datos["catalogo_error"] = str(exc)[:150]
 
-    return JSONResponse(datos)
+    return datos
+
+
+async def voces(request: Request) -> JSONResponse:
+    return JSONResponse(bloque_voz())
 
 
 async def descargar_voz(request: Request) -> Response:
@@ -394,6 +400,15 @@ async def audio(request: Request) -> Response:
     voz = request.query_params.get("voz") or aj.get("voz_activa") or ""
     if not voz:
         return _error("No hay ninguna voz seleccionada. Elige una en Ajustes.", 400)
+
+    # Se comprueba ANTES de sintetizar para poder decir cual falta. Si la voz
+    # guardada se borro o nunca se descargo, el mensaje debe nombrarla.
+    instaladas = {v["id"] for v in tts.voces_disponibles() if v["instalada"]}
+    if voz not in instaladas:
+        nombre = tts.VOCES.get(voz, {}).get("nombre", voz)
+        return _error(
+            f"La voz «{nombre}» no está descargada. Descárgala en Ajustes → "
+            f"Lectura en voz alta, o elige otra de las instaladas.", 400)
 
     try:
         wav = await anyio.to_thread.run_sync(

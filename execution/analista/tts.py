@@ -241,12 +241,11 @@ def sintetizar(
     if ritmo not in RITMOS:
         ritmo = RITMO_POR_DEFECTO
 
+    # Sin sustituciones a escondidas: si la voz pedida no esta, se devuelve
+    # None y quien llama avisa. Antes se caia en la primera voz instalada y el
+    # usuario elegia una voz femenina argentina y le respondia un hombre
+    # espanol, sin explicacion ninguna.
     modelo = _cargar_voz(voz)
-    if modelo is None:  # esa voz no esta instalada: probamos las otras
-        for alternativa in VOCES:
-            modelo = _cargar_voz(alternativa)
-            if modelo is not None:
-                break
     if modelo is None:
         return None
 

@@ -1,6 +1,7 @@
 package com.jhonsu01.analista
 
 import android.annotation.SuppressLint
+import android.app.DownloadManager
 import android.content.Context
 import android.content.SharedPreferences
 import android.graphics.Color
@@ -9,6 +10,7 @@ import android.os.Bundle
 import android.view.View
 import android.view.WindowManager
 import android.webkit.PermissionRequest
+import android.webkit.URLUtil
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -84,6 +86,13 @@ class MainActivity : AppCompatActivity() {
                     if (req?.isForMainFrame == true) mostrarPanel("Se perdió la conexión con el Analista.")
                 }
             }
+
+            // Sin esto, "Exportar" no hace absolutamente nada: un WebView
+            // ignora las respuestas con Content-Disposition y no descarga.
+            // El servidor respondia correctamente y el archivo se perdia.
+            setDownloadListener { url, agente, disposicion, tipo, _ ->
+                descargar(url, agente, disposicion, tipo)
+            }
         }
         raiz.addView(web, FrameLayout.LayoutParams(-1, -1))
 
@@ -156,6 +165,27 @@ class MainActivity : AppCompatActivity() {
         }
         raiz.addView(panelConexion, FrameLayout.LayoutParams(-1, -1))
         setContentView(raiz)
+    }
+
+    /** Guarda en Descargas lo que el WebView no sabe descargar por su cuenta. */
+    private fun descargar(url: String, agente: String?, disposicion: String?, tipo: String?) {
+        try {
+            val nombre = URLUtil.guessFileName(url, disposicion, tipo)
+            val peticion = DownloadManager.Request(android.net.Uri.parse(url)).apply {
+                setTitle(nombre)
+                setDescription("Analista de Gestión")
+                if (agente != null) addRequestHeader("User-Agent", agente)
+                setNotificationVisibility(
+                    DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                setDestinationInExternalPublicDir(
+                    android.os.Environment.DIRECTORY_DOWNLOADS, nombre)
+            }
+            (getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(peticion)
+            Toast.makeText(this, "Guardando $nombre en Descargas", Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            Toast.makeText(this, "No pude guardar el archivo: ${e.message}",
+                Toast.LENGTH_LONG).show()
+        }
     }
 
     private fun mostrarPanel(mensaje: String) {

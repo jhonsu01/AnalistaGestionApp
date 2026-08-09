@@ -482,13 +482,23 @@ dialog select {
 
   body.lateral-abierto #lateral { transform: translateX(0); }
 
-  #velo {
+  /* El velo SOLO existe mientras el cajón está abierto.
+     Antes esta regla ponía `display: block` a secas y el atributo `hidden` del
+     HTML no podía con ella: una regla explícita de `display` gana siempre. El
+     resultado era una capa fija a pantalla completa, con z-index 40, que se
+     tragaba todos los toques. La app se veía perfecta y no respondía a nada.
+     En escritorio no se notaba porque esta media query no llega a aplicarse. */
+  body.lateral-abierto #velo {
     display: block;
     position: fixed;
     inset: 0;
     background: rgba(0, 0, 0, .55);
     z-index: 40;
   }
+
+  /* Cinturón y tirantes: si algún día vuelve a colarse un `display` suelto,
+     `hidden` sigue mandando. */
+  #velo[hidden] { display: none !important; }
 
   #principal {
     padding: 1rem;

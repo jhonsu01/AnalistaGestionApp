@@ -429,8 +429,36 @@ $('#btn-copiar').addEventListener('click', async () => {
   } catch { aviso('No pude copiar.', 'error'); }
 });
 
-$('#btn-exportar').addEventListener('click', () => {
-  if (estado.consultaActual) location.href = `/api/consulta/${estado.consultaActual}/markdown`;
+$('#btn-exportar').addEventListener('click', async () => {
+  const id = estado.consultaActual;
+  if (!id) return;
+
+  // `location.href` NO sirve aquí: esto corre dentro de un WebView, y ni el de
+  // Android ni WebView2 descargan nada por navegar a una respuesta con
+  // Content-Disposition. El servidor respondía bien y no ocurría nada.
+  // Un <a download> sobre la URL real sí dispara el gestor de descargas de
+  // ambos (en Android lo recoge el DownloadListener de MainActivity).
+  const url = `/api/consulta/${id}/markdown`;
+  const enlace = document.createElement('a');
+  enlace.href = url;
+  enlace.download = `consulta-${id}.md`;
+  document.body.appendChild(enlace);
+  enlace.click();
+  enlace.remove();
+
+  // Red de seguridad: si el entorno no permite descargar, al menos que el
+  // texto quede en el portapapeles en vez de perderse en silencio.
+  try {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error(r.status);
+    const texto = await r.text();
+    await navigator.clipboard.writeText(texto);
+    aviso('Exportado. También lo copié al portapapeles por si acaso.', 'ok');
+    setTimeout(() => aviso(''), 4000);
+  } catch {
+    aviso('Descarga lanzada. Si no aparece, usa el botón Copiar.', 'atencion');
+    setTimeout(() => aviso(''), 4000);
+  }
 });
 
 $('#btn-borrar').addEventListener('click', () => {

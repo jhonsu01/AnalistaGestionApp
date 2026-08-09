@@ -35,6 +35,16 @@ fn raiz() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
+/// Carpeta Descargas del usuario, para dejar ahi lo que exporte.
+///
+/// Se arma desde USERPROFILE en vez de preguntar por la ruta real de la
+/// biblioteca: no merece la pena arrastrar una dependencia de Windows entera
+/// por esto, y si la carpeta no existe se deja que WebView2 decida.
+fn carpeta_descargas() -> Option<PathBuf> {
+    let destino = PathBuf::from(std::env::var("USERPROFILE").ok()?).join("Downloads");
+    destino.is_dir().then_some(destino)
+}
+
 /// Donde queda escrito lo que dijo el servidor al arrancar.
 fn registro(raiz: &Path) -> PathBuf {
     raiz.join(".tmp").join("arranque.log")
@@ -197,10 +207,21 @@ fn main() -> wry::Result<()> {
 
     let _webview = WebViewBuilder::new()
         .with_url(destino)
-        // Los cuentos se leen solos al abrirlos: sin esto el audio queda mudo
-        // esperando un clic que nadie va a dar.
+        // La respuesta se lee en voz alta en cuanto se pide: sin esto el audio
+        // queda mudo esperando un clic que nadie va a dar.
         .with_autoplay(true)
         .with_background_color((26, 24, 22, 255))
+        // Sin este manejador, WebView2 descarta las descargas en silencio y
+        // el boton "Exportar" no hacia nada: el servidor entregaba el archivo
+        // y se perdia. Aqui se acepta y se manda a la carpeta Descargas.
+        .with_download_started_handler(|_uri, ruta| {
+            if let Some(descargas) = carpeta_descargas() {
+                if let Some(nombre) = ruta.file_name().map(|n| n.to_os_string()) {
+                    *ruta = descargas.join(nombre);
+                }
+            }
+            true
+        })
         .build(&ventana)?;
 
     evento.run(move |evt, _, control| {
