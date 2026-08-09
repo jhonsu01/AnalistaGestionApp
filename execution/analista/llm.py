@@ -7,6 +7,7 @@ modelo: se conecta al que el usuario ya tenga corriendo.
 from __future__ import annotations
 
 import json
+import re
 import urllib.error
 import urllib.request
 from typing import Iterator, Optional
@@ -40,6 +41,45 @@ SISTEMA = (
 # al modelo solo le queda leerlos y redactar. Cuando el razonamiento se
 # desbordaba, ademas, consumia todo el cupo y la respuesta llegaba VACIA.
 SIN_RAZONAMIENTO = {"reasoning_effort": "low"}
+
+
+class ContextoExcedido(Exception):
+    """El prompt no cabe en la ventana con la que se cargo el modelo.
+
+    Se detecta leyendo el stream, no por el codigo HTTP: LM Studio responde
+    200 y mete el error DENTRO del SSE, en una linea `event: error`. Un lector
+    que solo mire los `data:` con `choices` no ve nada y cree que el modelo se
+    quedo mudo.
+    """
+
+    def __init__(self, n_ctx: int, n_prompt: int):
+        self.n_ctx = n_ctx
+        self.n_prompt = n_prompt
+        super().__init__(f"prompt de {n_prompt} tokens en una ventana de {n_ctx}")
+
+
+_RE_CONTEXTO = re.compile(
+    r"exceeds the available context size|exceed_context_size", re.IGNORECASE
+)
+
+
+def _mirar_error(datos: str) -> None:
+    """Levanta la excepcion adecuada si esta linea del stream trae un error."""
+    try:
+        cuerpo = json.loads(datos)
+    except json.JSONDecodeError:
+        return
+    error = cuerpo.get("error")
+    if not error:
+        return
+    mensaje = error.get("message", "") if isinstance(error, dict) else str(error)
+    if _RE_CONTEXTO.search(mensaje):
+        n_ctx = int((re.search(r'"n_ctx":\s*(\d+)', mensaje) or [0, 0])[1] or 0)
+        n_prompt = int(
+            (re.search(r'"n_prompt_tokens":\s*(\d+)', mensaje) or [0, 0])[1] or 0
+        )
+        raise ContextoExcedido(n_ctx, n_prompt)
+    raise RuntimeError(mensaje[:300] or "el servidor devolvió un error sin detalle")
 
 
 def _ajustes() -> dict:
@@ -81,6 +121,32 @@ def modelos() -> list[str]:
         return [m["id"] for m in datos.get("data", [])]
     except Exception:
         return []
+
+
+def ventana_cargada(modelo: str) -> tuple[int, int]:
+    """(tokens con los que se cargo el modelo, tope que admite). (0, 0) si no se sabe.
+
+    Es un endpoint propio de LM Studio, fuera de la API OpenAI. Merece la pena
+    consultarlo porque un modelo que admite 262.144 tokens puede estar cargado
+    con 8.192, y esa diferencia decide si el corpus cabe o no. El servidor que
+    no lo tenga devuelve 404 y aqui no pasa nada.
+    """
+    aj = _ajustes()
+    base = (aj.get("llm_url") or config.LLM_URL_DEFECTO).rstrip("/")
+    raiz = base[:-3].rstrip("/") if base.endswith("/v1") else base
+    try:
+        req = urllib.request.Request(
+            f"{raiz}/api/v0/models", headers=_cabeceras(aj.get("llm_api_key", ""))
+        )
+        with urllib.request.urlopen(req, timeout=10) as r:
+            datos = json.loads(r.read().decode("utf-8"))
+    except Exception:
+        return 0, 0
+    for m in datos.get("data", []):
+        if m.get("id") == modelo:
+            return (int(m.get("loaded_context_length") or 0),
+                    int(m.get("max_context_length") or 0))
+    return 0, 0
 
 
 def diagnostico() -> dict:
@@ -191,12 +257,14 @@ def responder_stream(
 ) -> Iterator[str]:
     """Emite la respuesta por trozos, para que se vea escribirse en pantalla.
 
-    OJO CON max_tokens: los modelos tipo gemma razonan antes de responder y ese
-    razonamiento gasta del MISMO cupo. Con 20 fragmentos el razonamiento se
-    alarga y un tope de 3.500 se agotaba antes de escribir una sola palabra:
-    la API devolvia contenido VACIO con finish_reason "length" y sin error, de
-    modo que parecia que el corpus no tenia la informacion. Por eso el cupo va
-    holgado y es configurable.
+    Dos trampas conocidas, las dos silenciosas:
+
+    - El razonamiento del modelo se descuenta del MISMO `max_tokens` que la
+      respuesta. Al agotarse, la API devuelve contenido VACIO con
+      finish_reason "length" y sin error. Por eso se pide no razonar.
+    - Si el prompt no cabe en la ventana con la que se cargo el modelo, LM
+      Studio responde HTTP 200 y mete el error dentro del stream. Aqui se lee
+      y se reintenta recortando, en vez de devolver silencio.
     """
     aj = _ajustes()
     url = (aj.get("llm_url") or config.LLM_URL_DEFECTO).rstrip("/")
@@ -208,7 +276,9 @@ def responder_stream(
     prompt = _prompt(pregunta, fragmentos, chars)
     cupo = int(aj.get("max_tokens") or config.MAX_TOKENS)
 
-    def intentar(tope: int, sin_razonar: bool = True) -> tuple[list[str], list[str]]:
+    def intentar(
+        tope: int, sin_razonar: bool = True, texto: str = ""
+    ) -> tuple[list[str], list[str]]:
         """Lanza una peticion y devuelve (respuesta, razonamiento).
 
         Se recogen los dos por separado porque los modelos con razonamiento lo
@@ -219,7 +289,7 @@ def responder_stream(
             "model": modelo,
             "messages": [
                 {"role": "system", "content": SISTEMA},
-                {"role": "user", "content": prompt},
+                {"role": "user", "content": texto or prompt},
             ],
             "temperature": config.TEMPERATURA,
             "max_tokens": tope,
@@ -244,6 +314,7 @@ def responder_stream(
                 datos = linea[5:].strip()
                 if datos == "[DONE]":
                     break
+                _mirar_error(datos)   # el error viaja DENTRO del stream, con HTTP 200
                 try:
                     trozo = json.loads(datos)
                 except json.JSONDecodeError:
@@ -256,23 +327,60 @@ def responder_stream(
                         razonamiento.append(delta[campo])
         return piezas, razonamiento
 
+    aviso_recorte = ""
     try:
-        piezas, razonamiento = intentar(cupo)
-    except urllib.error.HTTPError as exc:
-        # Un servidor que no conozca `reasoning_effort` puede rechazar la
-        # peticion entera. Se reintenta tal cual, sin ese parametro.
-        if exc.code != 400:
-            raise
-        piezas, razonamiento = intentar(cupo, sin_razonar=False)
+        try:
+            piezas, razonamiento = intentar(cupo)
+        except urllib.error.HTTPError as exc:
+            # Un servidor que no conozca `reasoning_effort` puede rechazar la
+            # peticion entera. Se reintenta tal cual, sin ese parametro.
+            if exc.code != 400:
+                raise
+            piezas, razonamiento = intentar(cupo, sin_razonar=False)
+        except RuntimeError:
+            # Fallo transitorio del motor (visto: "produced output that does not
+            # match the expected peg-gemma4 format"). No depende de la pregunta
+            # ni del contexto: la misma peticion suele salir bien a la segunda.
+            piezas, razonamiento = intentar(cupo)
+    except ContextoExcedido as exc:
+        # El modelo esta cargado con una ventana mas pequena de lo que creiamos.
+        # No hace falta molestar al usuario: se recorta a lo que de verdad cabe.
+        # Se reserva una parte de la ventana para la respuesta, porque prompt y
+        # respuesta comparten la misma ventana.
+        ventana = exc.n_ctx or 8192
+        salida = max(512, min(cupo, ventana // 4))
+        hueco = max(1000, ventana - salida - 200)   # 200 de margen para plantilla
+        antes = len(fragmentos)
+        fragmentos, _tk, _nota = comprimir(fragmentos, chars, hueco)
+        corte = min(chars, 1500)
+        recortado = _prompt(pregunta, fragmentos, corte)
+
+        # El separador de miles se arma aparte: aplicar un replace de comas al
+        # mensaje entero se llevaba por delante las comas de la propia frase.
+        miles = f"{ventana:,}".replace(",", ".")
+        perdidos = antes - len(fragmentos)
+        que_paso = (
+            f"se descartaron {perdidos} de {antes} fragmentos"
+            if perdidos else
+            f"se acortó cada uno de los {antes} fragmentos a {corte} caracteres"
+        )
+        aviso_recorte = (
+            f"\n\n---\n\n*Nota: tu modelo está cargado con una ventana de {miles} "
+            f"tokens y el contexto no cabía, así que {que_paso}. Para aprovechar "
+            f"el corpus completo, sube el «Context Length» del modelo en LM Studio.*"
+        )
+        piezas, razonamiento = intentar(salida, texto=recortado)
 
     # Si aun asi no escribio nada, casi siempre es que agoto el cupo. Se
     # reintenta con el doble en vez de pedirle al usuario que ajuste numeros.
-    if not piezas:
+    if not piezas and not aviso_recorte:
         piezas, razonamiento = intentar(cupo * 2, sin_razonar=False)
 
     if piezas:
         for p in piezas:
             yield p
+        if aviso_recorte:
+            yield aviso_recorte
         return
 
     # Ultimo recurso: el modelo razono pero nunca paso a redactar. Ese
@@ -366,10 +474,26 @@ def probar_conexion() -> dict:
                        "Cárgalo en el servidor o corrige su nombre.",
         }
 
+    # 3) Con que ventana se cargo el modelo. Es la causa mas comun de que una
+    #    consulta grande falle, y no se ve por ningun lado hasta que falla.
+    cargada, tope = ventana_cargada(modelo)
+    nota = ""
+    if cargada:
+        miles = f"{cargada:,}".replace(",", ".")
+        nota = f" Ventana cargada: {miles} tokens."
+        # Con 12 fragmentos el prompt ronda los 6-8k; por debajo de 16k hay que
+        # recortar a menudo y el usuario pierde contexto sin enterarse.
+        if tope > cargada * 1.5 and cargada < 16000:
+            nota += (f" El modelo admite hasta {f'{tope:,}'.replace(',', '.')}: "
+                     f"súbele el «Context Length» en LM Studio para aprovechar "
+                     f"el corpus completo.")
+
     return {
         "ok": True,
         "modelos": disponibles,
         "detalle": f"Todo correcto. Chat: {modelo}. "
-                   f"Embeddings: {len(vector)} dimensiones.",
+                   f"Embeddings: {len(vector)} dimensiones.{nota}",
         "dimensiones": len(vector),
+        "contexto_cargado": cargada,
+        "contexto_maximo_modelo": tope,
     }
