@@ -2,7 +2,7 @@
 
 ![Analista de Gestión Pública](docs/img/portada.png)
 
-![versión](https://img.shields.io/badge/versión-0.1.10-38bdf8)
+![versión](https://img.shields.io/badge/versión-0.1.11-38bdf8)
 ![licencia](https://img.shields.io/badge/licencia-MIT-64748b)
 ![plataformas](https://img.shields.io/badge/Windows%20%7C%20Android-0f172a)
 
