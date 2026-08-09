@@ -160,6 +160,150 @@ def hay_alguna_voz() -> bool:
     return any(_fichero_voz(c) is not None for c in VOCES)
 
 
+# --------------------------------------------------------------------------
+# Preparar el texto para que suene a persona, no a volcado de Markdown
+# --------------------------------------------------------------------------
+_UNIDADES = ["", "uno", "dos", "tres", "cuatro", "cinco", "seis", "siete",
+             "ocho", "nueve", "diez", "once", "doce", "trece", "catorce",
+             "quince", "dieciséis", "diecisiete", "dieciocho", "diecinueve",
+             "veinte", "veintiuno", "veintidós", "veintitrés", "veinticuatro",
+             "veinticinco", "veintiséis", "veintisiete", "veintiocho",
+             "veintinueve"]
+_DECENAS = ["", "", "", "treinta", "cuarenta", "cincuenta", "sesenta",
+            "setenta", "ochenta", "noventa"]
+_CENTENAS = ["", "ciento", "doscientos", "trescientos", "cuatrocientos",
+             "quinientos", "seiscientos", "setecientos", "ochocientos",
+             "novecientos"]
+
+
+def _hasta_999(n: int) -> str:
+    if n == 0:
+        return ""
+    if n == 100:
+        return "cien"
+    partes = []
+    if n >= 100:
+        partes.append(_CENTENAS[n // 100])
+        n %= 100
+    if n:
+        if n < 30:
+            partes.append(_UNIDADES[n])
+        else:
+            palabra = _DECENAS[n // 10]
+            if n % 10:
+                palabra += f" y {_UNIDADES[n % 10]}"
+            partes.append(palabra)
+    return " ".join(partes)
+
+
+def _apocope(texto: str) -> str:
+    """"uno" pasa a "un" delante de una magnitud: sesenta y un millones."""
+    if texto.endswith("veintiuno"):
+        return texto[:-len("veintiuno")] + "veintiún"
+    if texto.endswith("uno"):
+        return texto[:-3] + "un"
+    return texto
+
+
+def numero_a_palabras(n: int) -> str:
+    """Entero a palabras en español, con la escala larga que se usa aquí.
+
+    Importa acertar la magnitud: en español un billón son un millón de millones,
+    no mil millones. Leer "22.261.110.622" como "veintidós millones" cambia el
+    dato por un factor de mil, que en cifras de gasto público no es un detalle.
+    """
+    if n == 0:
+        return "cero"
+    if n < 0:
+        return f"menos {numero_a_palabras(-n)}"
+
+    escalas = [
+        (10 ** 12, "billón", "billones"),
+        (10 ** 6, "millón", "millones"),
+        (10 ** 3, "mil", "mil"),
+    ]
+    partes = []
+    for valor, singular, plural in escalas:
+        if n >= valor:
+            cuantos, n = divmod(n, valor)
+            if valor == 10 ** 3:
+                # "mil", no "uno mil"; y "veintitrés mil"
+                partes.append("mil" if cuantos == 1
+                              else f"{_apocope(numero_a_palabras(cuantos))} mil")
+            elif cuantos == 1:
+                partes.append(f"un {singular}")
+            else:
+                partes.append(f"{_apocope(numero_a_palabras(cuantos))} {plural}")
+    if n:
+        partes.append(_hasta_999(n))
+    return " ".join(p for p in partes if p)
+
+
+# En este país el punto separa los miles y la coma los decimales: 1.234.567,89
+_NUM = r"(\d{1,3}(?:\.\d{3})+|\d+)(?:,(\d+))?"
+_MAGNITUD = r"(?:\s*(miles de millones|mil millones|millones|millón|billones|billón))?"
+
+# "$ 380.816 millones" -> hay que leer la magnitud ANTES de decir "de pesos".
+# La cola opcional se captura para NO repetirla: el modelo a veces ya escribe
+# "$ 2 billones de pesos", y sin esto sonaba "dos billones de pesos de pesos".
+_RE_DINERO = re.compile(
+    rf"\$\s*{_NUM}{_MAGNITUD}(\s+de\s+pesos|\s+pesos)?", re.IGNORECASE)
+# Cifras largas sueltas, sin símbolo de moneda delante
+_RE_CIFRA = re.compile(rf"(?<![\w.,$]){_NUM}")
+
+
+def _en_palabras(entero: str, decimales: str | None) -> str:
+    texto = numero_a_palabras(int(entero.replace(".", "")))
+    if decimales:
+        limpio = decimales.rstrip("0")
+        if limpio:
+            texto += f" coma {numero_a_palabras(int(limpio))}"
+    return texto
+
+
+def _leer_dinero(m: re.Match) -> str:
+    cifra = _en_palabras(m.group(1), m.group(2))
+    magnitud = (m.group(3) or "").lower()
+    return f"{cifra} {magnitud} de pesos" if magnitud else f"{cifra} pesos"
+
+
+def _leer_cifra(m: re.Match) -> str:
+    # Solo las largas: los años y los números pequeños ya se leen bien solos.
+    if "." not in m.group(1) and len(m.group(1)) <= 4 and not m.group(2):
+        return m.group(0)
+    return _en_palabras(m.group(1), m.group(2))
+
+
+def limpiar_para_voz(texto: str) -> str:
+    """Quita la notación que solo tiene sentido escrita y lee bien las cifras.
+
+    Nace de escuchar la app: leía literalmente "asterisco asterisco" en cada
+    negrita, decía "dólar" ante un símbolo que aquí siempre son pesos, y las
+    cifras largas salían ininteligibles.
+    """
+    t = texto
+
+    # Markdown: se va entero, incluidas las viñetas y los separadores.
+    t = re.sub(r"```.*?```", " ", t, flags=re.DOTALL)      # bloques de código
+    t = re.sub(r"^\s{0,3}#{1,6}\s*", "", t, flags=re.MULTILINE)   # títulos
+    t = re.sub(r"^\s*[-*•]\s+", "", t, flags=re.MULTILINE)        # viñetas
+    t = re.sub(r"^\s*[-*_]{3,}\s*$", "", t, flags=re.MULTILINE)   # separadores
+    t = re.sub(r"\*{1,3}([^*]+)\*{1,3}", r"\1", t)        # **negrita**, *cursiva*
+    t = re.sub(r"[*_`]", "", t)                            # símbolos sueltos
+    t = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", t)        # [texto](enlace)
+    t = t.replace("|", ", ")                               # tablas
+
+    # El dinero primero: "$" nunca es "dólar" aquí, y la palabra "pesos" va
+    # DESPUÉS de la magnitud ("380.816 millones de pesos", no "pesos 380.816").
+    t = _RE_DINERO.sub(_leer_dinero, t)
+    t = _RE_CIFRA.sub(_leer_cifra, t)
+    t = t.replace("$", " pesos ")   # símbolos sueltos que quedaran por ahí
+
+    t = t.replace("%", " por ciento")
+    t = re.sub(r"[ \t]{2,}", " ", t)
+    return t.strip()
+
+
 def _wav_bytes(muestras: np.ndarray, sample_rate: int) -> bytes:
     buf = io.BytesIO()
     with wave.open(buf, "wb") as w:
@@ -254,7 +398,7 @@ def sintetizar(
     partes: list[np.ndarray] = []
     sr_base = 22050
     silencio = None
-    for frase in _frases(texto):
+    for frase in _frases(limpiar_para_voz(texto)):
         audio, sr = _piper(modelo, frase, syn_config)
         if audio is None:
             continue

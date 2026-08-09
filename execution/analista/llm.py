@@ -254,6 +254,35 @@ def comprimir(
     )
 
 
+def encoger(
+    fragmentos: list[dict], chars: int, pregunta: str, tope_tokens: int
+) -> tuple[list[dict], int]:
+    """Ajusta material y recorte hasta que el prompt QUEPA de verdad.
+
+    La version anterior recortaba a 1.500 caracteres por fragmento y daba el
+    trabajo por hecho. Con 24 fragmentos eso son 36.000 caracteres: seguia sin
+    caber en una ventana de 8.192 y la consulta moria igual, solo que despues
+    de reintentar. Aqui se mide el prompt REAL en cada vuelta y se sigue
+    apretando (primero el texto, luego el numero de fuentes) hasta que entra.
+    """
+    frs = list(fragmentos)
+    corte = chars
+    for _ in range(8):
+        if not frs:
+            break
+        # Reparto del presupuesto entre las fuentes que quedan, con margen
+        # para la cabecera de cada bloque (entidad, sector, nombre de archivo).
+        por_fragmento = (tope_tokens * config.CHARS_POR_TOKEN) // len(frs) - 160
+        corte = max(200, min(corte, por_fragmento))
+        if len(_prompt(pregunta, frs, corte)) // config.CHARS_POR_TOKEN <= tope_tokens:
+            return frs, corte
+        if len(frs) > 3:
+            frs = frs[: max(3, len(frs) * 2 // 3)]   # vienen ordenados por relevancia
+        else:
+            corte = max(200, corte // 2)
+    return frs, corte
+
+
 def responder_stream(
     pregunta: str, fragmentos: list[dict], chars: int = 4000
 ) -> Iterator[str]:
@@ -351,10 +380,9 @@ def responder_stream(
         # respuesta comparten la misma ventana.
         ventana = exc.n_ctx or 8192
         salida = max(512, min(cupo, ventana // 4))
-        hueco = max(1000, ventana - salida - 200)   # 200 de margen para plantilla
+        hueco = max(800, ventana - salida - 300)   # margen para system y plantilla
         antes = len(fragmentos)
-        fragmentos, _tk, _nota = comprimir(fragmentos, chars, hueco)
-        corte = min(chars, 1500)
+        fragmentos, corte = encoger(fragmentos, chars, pregunta, hueco)
         recortado = _prompt(pregunta, fragmentos, corte)
 
         # El separador de miles se arma aparte: aplicar un replace de comas al
@@ -371,7 +399,17 @@ def responder_stream(
             f"tokens y el contexto no cabía, así que {que_paso}. Para aprovechar "
             f"el corpus completo, sube el «Context Length» del modelo en LM Studio.*"
         )
-        piezas, razonamiento = intentar(salida, texto=recortado)
+        try:
+            piezas, razonamiento = intentar(salida, texto=recortado)
+        except ContextoExcedido as otra:
+            # La estimacion de tokens se quedo corta (4 caracteres por token es
+            # una aproximacion, no una ley). Ahora se sabe el tamano real, asi
+            # que se recorta contra el dato medido y no contra el calculo.
+            exceso = max(1.2, otra.n_prompt / max(1, hueco))
+            hueco = max(600, int(hueco / exceso) - 200)
+            fragmentos, corte = encoger(fragmentos, corte, pregunta, hueco)
+            piezas, razonamiento = intentar(
+                salida, texto=_prompt(pregunta, fragmentos, corte))
 
     # Si aun asi no escribio nada, casi siempre es que agoto el cupo. Se
     # reintenta con el doble en vez de pedirle al usuario que ajuste numeros.
