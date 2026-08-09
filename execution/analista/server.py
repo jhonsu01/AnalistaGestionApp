@@ -9,6 +9,8 @@ por eso escucha en 0.0.0.0.
 from __future__ import annotations
 
 import json
+import sys
+from pathlib import Path
 from typing import AsyncIterator
 
 import anyio
@@ -96,46 +98,106 @@ async def probar(request: Request) -> JSONResponse:
 
 
 async def voces(request: Request) -> JSONResponse:
-    """Voces instaladas. Se descargan aparte: no viajan en el instalador."""
-    if not VOZ_DISPONIBLE:
-        return JSONResponse(
-            {"disponible": False, "voces": [],
-             "detalle": "Falta onnxruntime en este equipo."}
-        )
-    try:
-        return JSONResponse({"disponible": True, **tts.estado_voz()})
-    except Exception as exc:  # noqa: BLE001
-        return JSONResponse({"disponible": False, "voces": [], "detalle": str(exc)[:150]})
+    """Voces instaladas y catalogo de las que se pueden descargar.
 
-
-async def audio(request: Request) -> Response:
-    """Lee en voz alta una respuesta guardada.
-
-    La sintesis va en un hilo aparte: Piper tarda segundos y bloquearia el
-    bucle de eventos, dejando la interfaz congelada mientras genera.
+    Las voces NO viajan en el instalador (pesan entre 28 y 114 MB cada una),
+    pero el usuario no deberia tener que abrir una consola para conseguirlas:
+    se descargan desde Ajustes con un clic.
     """
     if not VOZ_DISPONIBLE:
-        return _error("La sintesis de voz no esta disponible en este equipo.", 503)
-
-    datos = history.obtener(int(request.path_params["cid"]))
-    if not datos:
-        return _error("No existe", 404)
-
-    voz = config.leer_ajustes().get("voz_activa") or ""
-    if not voz:
-        return _error("No hay ninguna voz seleccionada en Ajustes.", 400)
-
-    try:
-        wav = await anyio.to_thread.run_sync(
-            lambda: tts.sintetizar(datos["respuesta"], voz)
+        return JSONResponse(
+            {"disponible": False, "voces": [], "catalogo": [],
+             "detalle": "Falta onnxruntime en este equipo."}
         )
+
+    datos = {"disponible": True, "catalogo": []}
+    try:
+        datos.update(tts.estado_voz())
     except Exception as exc:  # noqa: BLE001
-        return _error(f"No se pudo generar el audio: {exc}", 500)
+        datos["detalle"] = str(exc)[:150]
 
-    if not wav:
-        return _error("La voz no devolvio audio.", 500)
+    # `estado_voz()` devuelve el CATALOGO de voces que la app sabe usar, cada
+    # una con su campo `instalada`. Solo las instaladas pueden sonar: si se
+    # ofrecen todas, el usuario elige una, pulsa Escuchar y no pasa nada.
+    todas = datos.get("voces", [])
+    datos["voces"] = [v for v in todas if v.get("instalada")]
+    datos["conocidas"] = len(todas)
 
-    return Response(wav, media_type="audio/wav")
+    # Que se puede descargar y cuanto pesa
+    try:
+        import instalar_voz
+
+        archivos = (
+            [p.name for p in config.VOCES_DIR.glob("*.onnx")]
+            if config.VOCES_DIR.exists() else []
+        )
+        datos["catalogo"] = [
+            {
+                "clave": clave,
+                "descripcion": desc,
+                "mb": mb,
+                # El nombre del fichero descargado es el ultimo tramo de la ruta
+                "instalada": Path(ruta).name in archivos,
+            }
+            for clave, (ruta, mb, desc) in instalar_voz.CATALOGO.items()
+        ]
+    except Exception as exc:  # noqa: BLE001
+        datos["catalogo_error"] = str(exc)[:150]
+
+    return JSONResponse(datos)
+
+
+async def descargar_voz(request: Request) -> Response:
+    """Descarga una voz del catalogo, informando del avance en directo.
+
+    Va por SSE porque una voz son decenas de MB: con una peticion normal el
+    usuario se queda mirando un boton bloqueado sin saber si avanza.
+    """
+    clave = (request.query_params.get("voz") or "").strip()
+    if not clave:
+        return _error("Falta indicar la voz")
+
+    async def flujo() -> AsyncIterator[str]:
+        try:
+            import instalar_voz
+        except Exception as exc:  # noqa: BLE001
+            yield _sse("error", {"detalle": f"No encuentro el instalador: {exc}"})
+            return
+
+        if clave not in instalar_voz.CATALOGO:
+            yield _sse("error", {"detalle": f"La voz '{clave}' no esta en el catalogo."})
+            return
+
+        _ruta, mb, desc = instalar_voz.CATALOGO[clave]
+        yield _sse("fase", {"t": f"Descargando {desc} ({mb} MB)…"})
+
+        ok = await anyio.to_thread.run_sync(lambda: instalar_voz.instalar(clave))
+        if not ok:
+            yield _sse("error", {"detalle": "La descarga falló. Revisa tu conexión."})
+            return
+
+        # La voz acaba de aparecer en disco: hay que tirar la cache de modelos
+        # o el proceso seguira creyendo que no existe y el audio fallara hasta
+        # reiniciar la aplicacion.
+        if VOZ_DISPONIBLE:
+            tts.olvidar_cache()
+
+        # Releer el catalogo de voces ya instaladas
+        try:
+            estado_voz = tts.estado_voz() if VOZ_DISPONIBLE else {}
+        except Exception:  # noqa: BLE001
+            estado_voz = {}
+        instaladas = [v for v in estado_voz.get("voces", []) if v.get("instalada")]
+        yield _sse("fin", {"voces": instaladas})
+
+    return StreamingResponse(
+        flujo(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+# `audio` esta definida mas abajo, en la seccion de lectura en voz alta.
 
 
 async def guardar_ajustes(request: Request) -> JSONResponse:
@@ -190,6 +252,7 @@ async def consultar(request: Request) -> Response:
             lambda: rag.buscar(
                 vector, k, sector, entidad,
                 int(aj.get("max_por_documento", config.MAX_POR_DOCUMENTO)),
+                pregunta,
             )
         )
         if not fragmentos:
@@ -308,16 +371,8 @@ async def borrar(request: Request) -> JSONResponse:
 # --------------------------------------------------------------------------
 # Lectura en voz alta
 # --------------------------------------------------------------------------
-async def voces(request: Request) -> JSONResponse:
-    if not VOZ_DISPONIBLE:
-        return JSONResponse(
-            {"disponible": False, "voces": [],
-             "detalle": "Falta onnxruntime. Instálalo para activar la lectura."}
-        )
-    try:
-        return JSONResponse({"disponible": True, **tts.estado_voz()})
-    except Exception as exc:  # noqa: BLE001
-        return JSONResponse({"disponible": False, "detalle": str(exc)[:150]})
+# `voces` y `descargar_voz` estan definidas mas arriba, junto al resto de la
+# configuracion. Aqui solo queda la sintesis.
 
 
 async def audio(request: Request) -> Response:
@@ -370,6 +425,7 @@ def crear_app() -> Starlette:
         Route("/api/modelos", listar_modelos),
         Route("/api/probar", probar, methods=["POST"]),
         Route("/api/voces", voces),
+        Route("/api/voces/descargar", descargar_voz),
         Route("/api/catalogo", catalogo),
         Route("/api/consultar", consultar),
         Route("/api/historial", historial),

@@ -24,6 +24,10 @@ DATOS = Path(
 DB_FILE = DATOS / "consultas.db"
 AJUSTES_FILE = DATOS / "ajustes.json"
 
+# Voces de sintesis (Piper ONNX). Se descargan desde la propia app: pesan
+# entre 28 y 114 MB cada una y no viajan en el instalador.
+VOCES_DIR = DATOS / "voces"
+
 # Carpeta del corpus: la elige el usuario en la propia app.
 # Debe contener embeddings.npy, metadatos.jsonl y (opcional) indice.tv
 CORPUS_DEFECTO = ""
@@ -41,10 +45,10 @@ LLM_URL_DEFECTO = "http://localhost:1234/v1"
 LLM_MODELO_DEFECTO = ""      # vacio = autodetectar el que este cargado
 EMBED_MODELO_DEFECTO = "text-embedding-nomic-embed-text-v1.5"
 
-# El modelo razona antes de responder y ese razonamiento gasta del MISMO cupo
-# que la respuesta. Con 20 fragmentos el razonamiento se dispara y un tope de
-# 3.500 se agotaba antes de escribir nada: la API devolvia contenido VACIO sin
-# error alguno. Con holgura eso deja de pasar. Ver llm.py.
+# Cupo de salida. Va holgado: si el modelo razona, ese razonamiento se descuenta
+# del MISMO cupo que la respuesta, y al agotarse la API devuelve contenido VACIO
+# sin error alguno. La app pide no razonar (ver SIN_RAZONAMIENTO en llm.py), pero
+# el margen cubre a los servidores que ignoren esa peticion.
 MAX_TOKENS = 8000
 TEMPERATURA = 0.2            # baja: fidelidad al documento, no creatividad
 
@@ -52,8 +56,12 @@ TEMPERATURA = 0.2            # baja: fidelidad al documento, no creatividad
 # prudente y el usuario puede subirlo en Ajustes si su modelo da para mas.
 CONTEXTO_MAXIMO = 32000      # tokens de ENTRADA que se consideran seguros
 
-# Recuperacion
-FRAGMENTOS = 20              # cuantos trozos se pasan al modelo
+# Recuperacion.
+# Estaba en 20 y se bajo tras medirlo: 20 fragmentos son ~8.300 tokens de
+# prompt, y el tiempo de respuesta crece mucho mas rapido que la calidad. Con
+# 12 la respuesta cita las mismas fuentes en una fraccion del tiempo, sobre todo
+# desde que el reordenado prioriza los fragmentos con cifras.
+FRAGMENTOS = 12              # cuantos trozos se pasan al modelo
 CHARS_POR_FRAGMENTO = 4000
 MAX_POR_DOCUMENTO = 2        # evita que un solo archivo copie toda la respuesta
 
@@ -64,6 +72,10 @@ CHARS_POR_TOKEN = 4
 
 def asegurar_dirs() -> None:
     DATOS.mkdir(parents=True, exist_ok=True)
+    # La carpeta de voces DEBE existir antes de descargar nada: urlretrieve no
+    # crea directorios y fallaba con "No such file or directory" aunque la
+    # descarga en si estuviera perfectamente disponible.
+    VOCES_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # --------------------------------------------------------------------------
@@ -85,10 +97,6 @@ _DEFECTOS = {
     "voz_velocidad": 1.0,
 }
 
-# --------------------------------------------------------------------------
-# Voces (Piper ONNX). Se descargan aparte: NO viajan en el instalador.
-# --------------------------------------------------------------------------
-VOCES_DIR = DATOS / "voces"
 
 
 def leer_ajustes() -> dict:

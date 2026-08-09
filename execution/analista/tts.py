@@ -107,24 +107,39 @@ def _fichero_voz(clave: str) -> Optional[Path]:
 
 def _cargar_voz(clave: str):
     """Carga perezosa. La cache va por ARCHIVO, no por clave: sharvard M y F
-    comparten el mismo .onnx y seria absurdo tenerlo dos veces en memoria."""
-    archivo = VOCES.get(clave, {}).get("archivo", clave)
-    if archivo in _VOCES_CARGADAS:
-        return _VOCES_CARGADAS[archivo]
-    with _LOCK_CARGA:
-        if archivo in _VOCES_CARGADAS:
-            return _VOCES_CARGADAS[archivo]
-        ruta = _fichero_voz(clave)
-        modelo = None
-        if ruta is not None:
-            try:
-                from piper import PiperVoice
+    comparten el mismo .onnx y seria absurdo tenerlo dos veces en memoria.
 
-                modelo = PiperVoice.load(str(ruta))
-            except Exception:
-                modelo = None
+    SOLO se cachean los aciertos. Cachear el fallo parecia inofensivo y era el
+    bug mas escurridizo de la app: el servidor arranca sin voces instaladas,
+    guardaba None, y como las voces se descargan DESDE la propia app, esa
+    entrada envenenada sobrevivia a la descarga. La voz aparecia instalada, se
+    podia seleccionar, y el audio fallaba siempre hasta reiniciar.
+    """
+    archivo = VOCES.get(clave, {}).get("archivo", clave)
+    cargado = _VOCES_CARGADAS.get(archivo)
+    if cargado is not None:
+        return cargado
+    with _LOCK_CARGA:
+        cargado = _VOCES_CARGADAS.get(archivo)
+        if cargado is not None:
+            return cargado
+        ruta = _fichero_voz(clave)
+        if ruta is None:
+            return None
+        try:
+            from piper import PiperVoice
+
+            modelo = PiperVoice.load(str(ruta))
+        except Exception:
+            return None
         _VOCES_CARGADAS[archivo] = modelo
         return modelo
+
+
+def olvidar_cache() -> None:
+    """Se llama tras instalar una voz nueva, para que se recargue el catalogo."""
+    with _LOCK_CARGA:
+        _VOCES_CARGADAS.clear()
 
 
 def voces_disponibles() -> list[dict]:

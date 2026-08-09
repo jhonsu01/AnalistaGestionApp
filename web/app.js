@@ -82,7 +82,7 @@ async function cargarEstado() {
     $('#aj-clave').value = aj.llm_api_key || '';
     $('#aj-modelo').value = aj.llm_modelo || '';
     $('#aj-embed').value = aj.embed_modelo || '';
-    $('#num-k').value = aj.fragmentos || 20;
+    $('#num-k').value = aj.fragmentos || 12;
     $('#aj-maxtok').value = aj.max_tokens || 8000;
     $('#aj-ctx').value = aj.contexto_maximo || 32000;
     $('#aj-chars').value = aj.chars_por_fragmento || 4000;
@@ -119,10 +119,69 @@ function pintarVoces(voz, activa) {
   if (activa) sel.value = activa;
 
   $('#aviso-voz').textContent = voz?.disponible
-    ? (lista.length
-        ? 'Las voces se descargan aparte, no vienen en el instalador.'
-        : 'No hay voces instaladas. Ejecuta: python execution/instalar_voz.py --todas')
+    ? (lista.length ? `${lista.length} voz(ces) instalada(s).`
+                    : 'Aún no hay voces. Descarga una de la lista de abajo.')
     : (voz?.detalle || voz?.motivo || 'Síntesis de voz no disponible en este equipo.');
+
+  // Catálogo descargable: sin consolas, un botón por voz
+  const cat = voz?.catalogo || [];
+  $('#lista-voces').innerHTML = cat.length ? cat.map((v) => `
+    <li>
+      <span class="voz-nombre">${escapar(v.descripcion)}</span>
+      <span class="tenue">${v.mb} MB</span>
+      ${v.instalada
+        ? '<span class="ok-marca">instalada</span>'
+        : `<button type="button" class="plano bajar-voz" data-voz="${escapar(v.clave)}">Descargar</button>`}
+    </li>`).join('') : '<li class="tenue">Catálogo no disponible.</li>';
+
+  $$('.bajar-voz').forEach((b) =>
+    b.addEventListener('click', () => descargarVoz(b.dataset.voz, b)));
+}
+
+function descargarVoz(clave, boton) {
+  if (!clave) return;
+  boton.disabled = true;
+  boton.textContent = 'Descargando…';
+  const prog = $('#progreso-voz');
+  prog.className = 'diag';
+  prog.textContent = 'Preparando…';
+
+  const fuente = new EventSource('/api/voces/descargar?voz=' + encodeURIComponent(clave));
+
+  fuente.addEventListener('fase', (ev) => { prog.textContent = JSON.parse(ev.data).t; });
+
+  fuente.addEventListener('error', (ev) => {
+    let detalle = 'La descarga falló.';
+    try { detalle = JSON.parse(ev.data).detalle || detalle; } catch { /* SSE cortado */ }
+    prog.className = 'diag error';
+    prog.textContent = detalle;
+    boton.disabled = false;
+    boton.textContent = 'Reintentar';
+    fuente.close();
+  });
+
+  fuente.addEventListener('fin', async () => {
+    prog.className = 'diag ok';
+    prog.textContent = 'Voz instalada y lista para usar.';
+    fuente.close();
+    await cargarEstado();   // repinta el selector con la voz ya disponible
+
+    // Si no habia ninguna voz activa, se activa esta: quien acaba de esperar
+    // una descarga de decenas de MB quiere oirla, no buscarla en un desplegable.
+    const sel = $('#aj-voz');
+    if (!sel.value) {
+      // Las claves del catalogo y las del selector no siempre coinciden:
+      // sharvard trae dos hablantes (es_sharvard_m / es_sharvard_f) en un
+      // unico fichero descargable (es_sharvard).
+      const opcion = [...sel.options].find(
+        (o) => o.value === clave || o.value.startsWith(clave));
+      if (opcion) {
+        sel.value = opcion.value;
+        await guardarAjustes();
+        prog.textContent = `Voz instalada y activada: ${opcion.textContent.trim()}`;
+      }
+    }
+  });
 }
 
 async function cargarCatalogo() {
@@ -432,7 +491,7 @@ async function guardarAjustes(silencioso = false) {
     llm_api_key: $('#aj-clave').value,
     llm_modelo: $('#aj-modelo').value.trim(),
     embed_modelo: $('#aj-embed').value.trim(),
-    fragmentos: parseInt($('#num-k').value, 10) || 20,
+    fragmentos: parseInt($('#num-k').value, 10) || 12,
     max_tokens: parseInt($('#aj-maxtok').value, 10) || 8000,
     contexto_maximo: parseInt($('#aj-ctx').value, 10) || 32000,
     chars_por_fragmento: parseInt($('#aj-chars').value, 10) || 4000,

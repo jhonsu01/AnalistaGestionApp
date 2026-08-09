@@ -70,7 +70,7 @@
         </select>
         <label class="fragmentos">
           Fragmentos
-          <input id="num-k" type="number" min="4" max="60" value="20">
+          <input id="num-k" type="number" min="4" max="60" value="12">
         </label>
       </div>
     </details>
@@ -158,10 +158,16 @@
 
     <details class="plegable">
       <summary>Lectura en voz alta</summary>
-      <label>Voz
+      <label>Voz activa
         <select id="aj-voz"><option value="">Sin lectura</option></select>
-        <small id="aviso-voz">Las voces se descargan aparte, no vienen en el instalador.</small>
+        <small id="aviso-voz"></small>
       </label>
+      <div class="catalogo-voces">
+        <p class="tenue">Descarga las voces que quieras. Se guardan en tu carpeta
+        de datos, no en el instalador.</p>
+        <ul id="lista-voces"></ul>
+        <div id="progreso-voz" class="diag"></div>
+      </div>
     </details>
 
     <div id="diag-ajustes" class="diag"></div>

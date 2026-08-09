@@ -32,6 +32,70 @@ _LOCK = threading.Lock()
 # documento acaban con hashes distintos y parecen archivos diferentes.
 RE_SUFIJO_HASH = re.compile(r"_[0-9a-f]{8,12}(?=\.[A-Za-z0-9]+$|$)")
 
+# Palabras que delatan que la pregunta busca CIFRAS, no explicaciones.
+RE_PIDE_CIFRAS = re.compile(
+    r"\b(cuant\w+|cuánt\w+|monto|montos|valor|valores|total|totales|suma|"
+    r"presupuest\w*|ejecu\w*|gast\w*|invers\w*|cifra|cifras|pesos|millones|"
+    r"porcentaje|cuanto|cuánto)\b",
+    re.IGNORECASE,
+)
+RE_DIGITOS = re.compile(r"\d")
+
+
+def _densidad_numerica(texto: str) -> float:
+    """Proporcion de digitos: distingue una tabla de cifras de un parrafo."""
+    if not texto:
+        return 0.0
+    return len(RE_DIGITOS.findall(texto)) / len(texto)
+
+
+def reordenar(
+    candidatos: list[tuple[int, float]], pregunta: str
+) -> list[tuple[int, float]]:
+    """Corrige un sesgo del coseno: los fragmentos cortos ganan sin merecerlo.
+
+    Un chunk de 180 caracteres que dice "se relacionan los valores
+    presupuestados" se parece muchisimo a la pregunta "cuanto se gasto", pero
+    NO contiene la respuesta: es el encabezado de la tabla, no la tabla. Los
+    parrafos largos con las cifras quedaban fuera y el modelo respondia, con
+    razon, que los fragmentos no traian el dato.
+
+    Se corrige con dos ajustes sobre el puntaje:
+      - penalizar lo demasiado corto para contener una respuesta;
+      - si la pregunta pide cifras, premiar los fragmentos que las tienen.
+    """
+    pide_cifras = bool(RE_PIDE_CIFRAS.search(pregunta or ""))
+    ajustados: list[tuple[int, float]] = []
+
+    for pos, sim in candidatos:
+        if pos >= len(_METADATOS):
+            continue
+        texto = _TEXTOS.get(_METADATOS[pos].get("chunk_id"), "")
+        largo = len(texto)
+
+        factor = 1.0
+        # Por debajo de ~400 caracteres casi nunca hay una respuesta completa.
+        if largo < 200:
+            factor *= 0.72
+        elif largo < 400:
+            factor *= 0.85
+        elif largo < 700:
+            factor *= 0.95
+
+        if pide_cifras:
+            densidad = _densidad_numerica(texto)
+            if densidad > 0.04:      # tabla o listado de valores
+                factor *= 1.20
+            elif densidad > 0.015:   # parrafo con algunas cifras
+                factor *= 1.08
+            elif densidad < 0.003:   # prosa sin un solo numero
+                factor *= 0.88
+
+        ajustados.append((pos, sim * factor))
+
+    ajustados.sort(key=lambda x: -x[1])
+    return ajustados
+
 
 def base_documento(nombre: str) -> str:
     return RE_SUFIJO_HASH.sub("", nombre or "").strip().lower()
@@ -148,8 +212,9 @@ def buscar(
     sector: str = "",
     entidad: str = "",
     max_por_documento: int = 2,
+    pregunta: str = "",
 ) -> list[dict]:
-    """Devuelve los fragmentos mas parecidos, ya diversificados."""
+    """Devuelve los fragmentos mas parecidos, reordenados y diversificados."""
     if not cargar():
         return []
 
@@ -176,6 +241,10 @@ def buscar(
         candidatos = [(int(permitidos[j]), float(puntajes[j])) for j in mejores]
     else:
         candidatos = _buscar_global(vector, amplio, n)
+
+    # Corregir el sesgo hacia fragmentos cortos ANTES de diversificar: si no,
+    # la diversificacion consolida un top lleno de encabezados sin datos.
+    candidatos = reordenar(candidatos, pregunta)
 
     resultados = []
     for pos, sim in _diversificar(candidatos, k, max_por_documento):

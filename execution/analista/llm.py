@@ -28,6 +28,20 @@ SISTEMA = (
 )
 
 
+# Se le pide al servidor que NO razone, y se pide SIEMPRE, no como remedio.
+#
+# Medido contra gemma-4-26b con 10 fragmentos (prompt de 5.184 tokens):
+#
+#   sin el parametro      304 s   2.524 tokens de razonamiento   1.210 chars
+#   reasoning_effort low   62 s           0 tokens               1.944 chars
+#
+# Es cinco veces mas rapido Y responde mas. El razonamiento no aportaba nada
+# aqui: el trabajo de analisis ya lo hizo la busqueda al elegir los fragmentos,
+# al modelo solo le queda leerlos y redactar. Cuando el razonamiento se
+# desbordaba, ademas, consumia todo el cupo y la respuesta llegaba VACIA.
+SIN_RAZONAMIENTO = {"reasoning_effort": "low"}
+
+
 def _ajustes() -> dict:
     return config.leer_ajustes()
 
@@ -191,57 +205,97 @@ def responder_stream(
         disponibles = modelos()
         modelo = disponibles[0] if disponibles else "local-model"
 
-    cuerpo = json.dumps(
-        {
+    prompt = _prompt(pregunta, fragmentos, chars)
+    cupo = int(aj.get("max_tokens") or config.MAX_TOKENS)
+
+    def intentar(tope: int, sin_razonar: bool = True) -> tuple[list[str], list[str]]:
+        """Lanza una peticion y devuelve (respuesta, razonamiento).
+
+        Se recogen los dos por separado porque los modelos con razonamiento lo
+        emiten en `reasoning_content`, un campo distinto de `content`. Leer solo
+        `content` hacia que una respuesta larguisima pareciera silencio.
+        """
+        peticion = {
             "model": modelo,
             "messages": [
                 {"role": "system", "content": SISTEMA},
-                {"role": "user", "content": _prompt(pregunta, fragmentos, chars)},
+                {"role": "user", "content": prompt},
             ],
             "temperature": config.TEMPERATURA,
-            "max_tokens": int(aj.get("max_tokens") or config.MAX_TOKENS),
+            "max_tokens": tope,
             "stream": True,
         }
-    ).encode("utf-8")
+        if sin_razonar:
+            peticion.update(SIN_RAZONAMIENTO)
 
-    req = urllib.request.Request(
-        f"{url}/chat/completions",
-        data=cuerpo,
-        headers=_cabeceras(aj.get("llm_api_key", "")),
-        method="POST",
-    )
-
-    emitido = False
-    with urllib.request.urlopen(req, timeout=600) as respuesta:
-        for linea_bytes in respuesta:
-            linea = linea_bytes.decode("utf-8", errors="replace").strip()
-            if not linea.startswith("data:"):
-                continue
-            datos = linea[5:].strip()
-            if datos == "[DONE]":
-                break
-            try:
-                trozo = json.loads(datos)
-            except json.JSONDecodeError:
-                continue
-            eleccion = (trozo.get("choices") or [{}])[0]
-            texto = (eleccion.get("delta") or {}).get("content")
-            if texto:
-                emitido = True
-                yield texto
-
-    if not emitido:
-        # Sintoma tipico de cupo agotado por el razonamiento interno.
-        cupo = int(aj.get("max_tokens") or config.MAX_TOKENS)
-        yield (
-            f"El modelo no devolvió texto (cupo actual: {cupo} tokens de salida).\n\n"
-            "Casi siempre es porque agotó ese cupo razonando antes de escribir. "
-            "No significa que el corpus no tenga la información.\n\n"
-            "Qué probar, en este orden:\n"
-            "- Subir **Tokens de respuesta** en Ajustes (16000 suele bastar).\n"
-            "- Reducir **Fragmentos** a 8 o 10.\n"
-            "- Comprobar en Ajustes que el modelo cargado sea el correcto."
+        req = urllib.request.Request(
+            f"{url}/chat/completions",
+            data=json.dumps(peticion).encode("utf-8"),
+            headers=_cabeceras(aj.get("llm_api_key", "")),
+            method="POST",
         )
+        piezas: list[str] = []
+        razonamiento: list[str] = []
+        with urllib.request.urlopen(req, timeout=900) as respuesta:
+            for linea_bytes in respuesta:
+                linea = linea_bytes.decode("utf-8", errors="replace").strip()
+                if not linea.startswith("data:"):
+                    continue
+                datos = linea[5:].strip()
+                if datos == "[DONE]":
+                    break
+                try:
+                    trozo = json.loads(datos)
+                except json.JSONDecodeError:
+                    continue
+                delta = ((trozo.get("choices") or [{}])[0].get("delta")) or {}
+                if delta.get("content"):
+                    piezas.append(delta["content"])
+                for campo in ("reasoning_content", "reasoning"):
+                    if delta.get(campo):
+                        razonamiento.append(delta[campo])
+        return piezas, razonamiento
+
+    try:
+        piezas, razonamiento = intentar(cupo)
+    except urllib.error.HTTPError as exc:
+        # Un servidor que no conozca `reasoning_effort` puede rechazar la
+        # peticion entera. Se reintenta tal cual, sin ese parametro.
+        if exc.code != 400:
+            raise
+        piezas, razonamiento = intentar(cupo, sin_razonar=False)
+
+    # Si aun asi no escribio nada, casi siempre es que agoto el cupo. Se
+    # reintenta con el doble en vez de pedirle al usuario que ajuste numeros.
+    if not piezas:
+        piezas, razonamiento = intentar(cupo * 2, sin_razonar=False)
+
+    if piezas:
+        for p in piezas:
+            yield p
+        return
+
+    # Ultimo recurso: el modelo razono pero nunca paso a redactar. Ese
+    # razonamiento suele contener las cifras buscadas, asi que vale mas
+    # entregarlo que devolver un mensaje de error vacio.
+    borrador = "".join(razonamiento).strip()
+    if borrador:
+        yield (
+            "El modelo agotó su presupuesto razonando y no llegó a redactar la "
+            "respuesta final. Este es su razonamiento, que suele contener los "
+            "datos buscados:\n\n---\n\n"
+        )
+        yield borrador
+        return
+
+    yield (
+        f"El modelo no devolvió texto ni con {cupo * 2} tokens de cupo.\n\n"
+        "**No significa que el corpus no tenga la información.**\n\n"
+        "Qué probar:\n"
+        "- Reducir **Fragmentos** a 8 o 10 en Filtros.\n"
+        "- Usar un modelo sin modo de razonamiento.\n"
+        "- Comprobar en Ajustes que el modelo cargado sea el correcto."
+    )
 
 
 def probar_conexion() -> dict:
@@ -268,7 +322,7 @@ def probar_conexion() -> dict:
         }
 
     # 1) El modelo de chat responde
-    try:
+    def saludo(extra: dict) -> str:
         datos = _pedir(
             "/chat/completions",
             {
@@ -276,10 +330,21 @@ def probar_conexion() -> dict:
                 "messages": [{"role": "user", "content": "Responde solo: listo"}],
                 "max_tokens": 2000,
                 "temperature": 0,
+                **extra,
             },
             timeout=120,
         )
-        contenido = (datos["choices"][0]["message"].get("content") or "").strip()
+        return (datos["choices"][0]["message"].get("content") or "").strip()
+
+    try:
+        try:
+            # Sin esto el modelo razona incluso para saludar, y la prueba que
+            # deberia tardar un segundo se va a varios minutos.
+            contenido = saludo(SIN_RAZONAMIENTO)
+        except urllib.error.HTTPError as exc:
+            if exc.code != 400:
+                raise
+            contenido = saludo({})   # servidor que no conoce reasoning_effort
         if not contenido:
             return {
                 "ok": False,

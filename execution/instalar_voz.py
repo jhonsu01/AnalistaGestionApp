@@ -56,6 +56,13 @@ def descargar(url: str, destino: Path) -> bool:
 
 
 def instalar(clave: str) -> bool:
+    # La carpeta se crea AQUI, no solo en main(): la app descarga voces desde
+    # Ajustes llamando directamente a esta funcion, y sin el directorio la
+    # descarga fallaba con "No such file or directory" aunque el archivo
+    # estuviera perfectamente disponible en el servidor.
+    config.asegurar_dirs()
+    config.VOCES_DIR.mkdir(parents=True, exist_ok=True)
+
     rel, _, _ = CATALOGO[clave]
     nombre = Path(rel).name
     ok = descargar(f"{BASE}/{rel}", config.VOCES_DIR / nombre)
