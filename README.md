@@ -1,5 +1,7 @@
 # Analista de Gestión Pública
 
+![Analista de Gestión Pública](docs/img/portada.png)
+
 ![versión](https://img.shields.io/badge/versión-0.1.10-38bdf8)
 ![licencia](https://img.shields.io/badge/licencia-MIT-64748b)
 ![plataformas](https://img.shields.io/badge/Windows%20%7C%20Android-0f172a)
@@ -40,7 +42,14 @@ corpus pesa varios GB y el modelo otros tantos. Necesitas dos cosas:
 - `llama-server` de llama.cpp
 
 Hacen falta dos modelos: uno de **chat** (para redactar) y uno de
-**embeddings** (para buscar). Con `gemma-4` y `nomic-embed-text` funciona bien.
+**embeddings** (para buscar).
+
+> **Un modelo grande no es un modelo mejor aquí.** Medido en este proyecto:
+> `gemma-4-e2b` con una ventana de **131.072 tokens** da mejores respuestas y
+> gasta mucha menos memoria que `gemma-4-26b` limitado a 8.192. Un modelo
+> pequeño al que le caben los fragmentos enteros gana a uno grande al que hay
+> que recortarle el material. **Prioriza la ventana de contexto sobre el
+> tamaño del modelo.**
 
 **2. El índice del corpus**, una carpeta con:
 
@@ -51,8 +60,40 @@ corpus.jsonl       el texto de cada fragmento
 indice.tv          (opcional) índice comprimido, búsquedas más rápidas
 ```
 
-Ese índice se genera con el pipeline de datos a partir de los documentos
-públicos del [portal Datálogo del DNP](https://datalogo.dnp.gov.co/informe-empalme).
+Ese índice se genera a partir de los documentos públicos del
+[portal Datálogo del DNP](https://datalogo.dnp.gov.co/informe-empalme), o de
+**los documentos que tú quieras**.
+
+---
+
+## Construye el tuyo
+
+El proyecto sirve para cualquier corpus: actas municipales, contratos,
+normativa interna, documentación técnica. Todo el proceso está documentado:
+
+- **[Guía: cómo construir tu propio RAG](docs/GUIA-RAG.md)** — el paso a paso
+  completo, el hardware recomendado, el formato de datos y los errores que
+  cuestan horas.
+- **[Recomendaciones para publicar datos legibles por IA](docs/DATOS-PARA-LLM.md)**
+  — dirigido a entidades públicas, con lo aprendido procesando 8.820
+  documentos reales.
+
+Para generar el índice desde tus propios datos:
+
+```bash
+python execution/construir_indice.py --corpus datos/corpus.jsonl --salida datos/indice
+```
+
+### Hardware recomendado
+
+| Nivel | Equipo | Qué esperar |
+| --- | --- | --- |
+| Mínimo | 16 GB RAM, sin GPU | Corpus pequeño, respuestas en minutos |
+| **Recomendado** | 16 GB RAM + GPU de 8-12 GB | Corpus completo, respuestas en segundos |
+| Cómodo | 32 GB RAM + GPU de 16-24 GB | Modelos grandes con ventanas amplias |
+
+El índice se lee con `mmap`, así que **no necesitas tener 1,3 GB libres en RAM**
+para abrirlo. Un SSD ayuda más que memoria extra.
 
 ---
 
@@ -126,3 +167,22 @@ respuesta trae el archivo exacto para poder hacerlo.
 
 MIT. Los documentos consultados son públicos, amparados por la Ley 1712 de
 2014 de Transparencia y Acceso a la Información Pública de Colombia.
+
+---
+
+## Contacto e implementaciones
+
+¿Quieres montar algo así con los datos de tu organización, o necesitas ayuda
+para adaptarlo? Escríbeme:
+
+**[serviciosconiabyjhonsu.com](https://serviciosconiabyjhonsu.com/)**
+
+---
+
+## Apoya el proyecto
+
+Este proyecto es **gratuito y de código abierto**. Se hizo para que cualquiera
+pueda preguntarle a los datos públicos sin depender de servicios de pago. Si te
+resulta útil y quieres que siga creciendo:
+
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/V7V81LV7GX)

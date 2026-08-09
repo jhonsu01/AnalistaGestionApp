@@ -35,6 +35,33 @@ fn raiz() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
+/// Abre una direccion en el navegador del sistema.
+///
+/// Los enlaces de fuera (Ko-fi, el sitio de contacto) no deben cargarse dentro
+/// de esta ventana: no tiene barra de direcciones ni boton de atras, asi que el
+/// usuario se quedaria atrapado en una pagina ajena sin forma de volver.
+fn abrir_fuera(url: &str) {
+    // Solo http y https. Sin este filtro, una pagina podria pedir que se
+    // ejecutara cualquier cosa a traves del shell.
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // El argumento vacio es el TITULO de la ventana: sin el, `start` toma
+        // la URL como titulo y no abre nada.
+        let _ = Command::new("cmd")
+            .args(["/C", "start", "", url])
+            .creation_flags(SIN_VENTANA)
+            .spawn();
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = Command::new("xdg-open").arg(url).spawn();
+    }
+}
+
 /// Carpeta Descargas del usuario, para dejar ahi lo que exporte.
 ///
 /// Se arma desde USERPROFILE en vez de preguntar por la ruta real de la
@@ -221,6 +248,15 @@ fn main() -> wry::Result<()> {
                 }
             }
             true
+        })
+        // Lo que no sea la propia aplicacion se abre fuera. Devolver false
+        // cancela la navegacion dentro de la ventana.
+        .with_navigation_handler(|url| {
+            if url.starts_with(URL) || url.starts_with("about:") {
+                return true;
+            }
+            abrir_fuera(&url);
+            false
         })
         .build(&ventana)?;
 

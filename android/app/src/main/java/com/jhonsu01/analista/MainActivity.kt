@@ -85,6 +85,23 @@ class MainActivity : AppCompatActivity() {
                 ) {
                     if (req?.isForMainFrame == true) mostrarPanel("Se perdió la conexión con el Analista.")
                 }
+
+                /**
+                 * Los enlaces a sitios de fuera se abren en el navegador del
+                 * telefono. Dentro del WebView el usuario quedaria atrapado en
+                 * una pagina ajena, sin barra de direcciones ni forma clara de
+                 * volver a la aplicacion.
+                 */
+                override fun shouldOverrideUrlLoading(
+                    v: WebView?, req: WebResourceRequest?
+                ): Boolean {
+                    val destino = req?.url ?: return false
+                    val servidor = prefs.getString(CLAVE_SERVIDOR, null)
+                    if (destino.host != null && destino.host != servidor) {
+                        return abrirFuera(destino)
+                    }
+                    return false
+                }
             }
 
             // Sin esto, "Exportar" no hace absolutamente nada: un WebView
@@ -154,17 +171,36 @@ class MainActivity : AppCompatActivity() {
                 gravity = android.view.Gravity.CENTER
                 setPadding(0, 56, 0, 0)
                 setOnClickListener {
-                    startActivity(
-                        android.content.Intent(
-                            android.content.Intent.ACTION_VIEW,
-                            android.net.Uri.parse("https://ko-fi.com/V7V81LV7GX")
-                        )
-                    )
+                    abrirFuera(android.net.Uri.parse("https://ko-fi.com/V7V81LV7GX"))
+                }
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = "Contacto e implementaciones"
+                textSize = 12f
+                setTextColor(Color.parseColor("#7d756f"))
+                gravity = android.view.Gravity.CENTER
+                setPadding(0, 16, 0, 0)
+                setOnClickListener {
+                    abrirFuera(android.net.Uri.parse("https://serviciosconiabyjhonsu.com/"))
                 }
             })
         }
         raiz.addView(panelConexion, FrameLayout.LayoutParams(-1, -1))
         setContentView(raiz)
+    }
+
+    /** Abre una URL en el navegador del sistema. Devuelve true si la manejó. */
+    private fun abrirFuera(destino: android.net.Uri): Boolean {
+        // Solo http y https: un intent con cualquier otro esquema podria
+        // lanzar aplicaciones que no esperamos.
+        if (destino.scheme !in listOf("http", "https")) return false
+        return try {
+            startActivity(android.content.Intent(
+                android.content.Intent.ACTION_VIEW, destino))
+            true
+        } catch (_: Exception) {
+            false   // sin navegador instalado: que lo intente el WebView
+        }
     }
 
     /** Guarda en Descargas lo que el WebView no sabe descargar por su cuenta. */
