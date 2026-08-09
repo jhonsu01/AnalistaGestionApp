@@ -116,7 +116,9 @@ def modelos() -> list[str]:
         f"{url}/models", headers=_cabeceras(aj.get("llm_api_key", ""))
     )
     try:
-        with urllib.request.urlopen(req, timeout=10) as r:
+        # Corto a proposito: solo lista nombres. Si el servidor no contesta en
+        # 5 s es que no esta, y la pantalla no debe esperar mas por eso.
+        with urllib.request.urlopen(req, timeout=5) as r:
             datos = json.loads(r.read().decode("utf-8"))
         return [m["id"] for m in datos.get("data", [])]
     except Exception:

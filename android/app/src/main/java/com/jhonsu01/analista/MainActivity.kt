@@ -211,8 +211,16 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Sondea `/api/vivo`, NO `/api/estado`.
+     *
+     * `/api/estado` consulta el servidor de modelos por la red y tarda lo suyo.
+     * Al barrer 254 direcciones se le mandaban 254 peticiones caras al propio
+     * ordenador, que se quedaba atascado atendiendolas y la app se veia
+     * congelada. `/api/vivo` responde al instante y no toca nada pesado.
+     */
     private fun responde(ip: String, tiempo: Int): Boolean = try {
-        val con = URL("http://$ip:$PUERTO/api/estado").openConnection() as HttpURLConnection
+        val con = URL("http://$ip:$PUERTO/api/vivo").openConnection() as HttpURLConnection
         con.connectTimeout = tiempo
         con.readTimeout = tiempo
         con.requestMethod = "GET"

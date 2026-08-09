@@ -64,10 +64,16 @@ async def estado(request: Request) -> JSONResponse:
         except Exception as exc:  # noqa: BLE001
             voz = {"disponible": False, "motivo": str(exc)[:120]}
 
+    # `diagnostico()` pregunta al servidor de modelos por la red y es
+    # BLOQUEANTE. Llamarlo directamente aqui paraba el bucle de eventos entero
+    # mientras esperaba: con el servidor de modelos caido eran segundos en los
+    # que la aplicacion no atendia absolutamente nada y parecia colgada.
+    diag = await anyio.to_thread.run_sync(llm.diagnostico)
+
     return JSONResponse(
         {
             "corpus": rag.estado(),
-            "modelo": llm.diagnostico(),
+            "modelo": diag,
             "historial": history.estadisticas(),
             "ajustes": config.leer_ajustes(),
             "voz": voz,
@@ -79,7 +85,7 @@ async def estado(request: Request) -> JSONResponse:
 
 async def listar_modelos(request: Request) -> JSONResponse:
     """Modelos cargados en el servidor, para elegirlos sin escribirlos a mano."""
-    disponibles = llm.modelos()
+    disponibles = await anyio.to_thread.run_sync(llm.modelos)
     # Los de embeddings se distinguen por el nombre; no es infalible pero
     # acierta con los habituales (nomic, bge, e5, minilm, gte...).
     patron = ("embed", "bge", "e5-", "minilm", "gte-", "nomic")

@@ -70,6 +70,10 @@ $('#velo').addEventListener('click', () => abrirLateral(false));
 /* ------------------------------------------------------------------- estado */
 
 async function cargarEstado() {
+  // Este aviso importa: /api/estado pregunta por el servidor de modelos y, si
+  // ese servidor no contesta, tarda sus buenos segundos. Sin decir nada, la
+  // pantalla se queda en blanco y parece que la app se colgo.
+  aviso('Conectando con el servidor de modelos…');
   try {
     const r = await fetch('/api/estado');
     const d = await r.json();
