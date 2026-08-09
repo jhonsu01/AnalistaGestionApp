@@ -9,6 +9,7 @@ const estado = {
   consultaActual: null,
   filtro: 'todas',
   enCurso: false,
+  hayVoz: false,
 };
 
 /* ---------------------------------------------------------------- utilidades */
@@ -26,8 +27,8 @@ function escapar(t) {
   return d.innerHTML;
 }
 
-/* Markdown mínimo: negritas, cursivas, listas y saltos. Suficiente para lo
-   que devuelve el modelo, y sin traerse una librería entera. */
+/* Markdown mínimo. El texto se escapa ANTES de aplicar formato, así que no
+   puede inyectarse HTML por mucho que el modelo lo devuelva. */
 function markdown(texto) {
   const lineas = escapar(texto).split('\n');
   let html = '', enLista = false;
@@ -44,7 +45,6 @@ function markdown(texto) {
   if (enLista) html += '</ul>';
   return html
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/(^|\W)\*(?!\s)(.+?)(?<!\s)\*(?=\W|$)/g, '$1<em>$2</em>')
     .replace(/`(.+?)`/g, '<code>$1</code>');
 }
 
@@ -55,7 +55,19 @@ function fechaCorta(iso) {
     : f.toLocaleString('es-CO', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
 
-/* ------------------------------------------------------------------- arranque */
+/* --------------------------------------------------------- lateral en móvil */
+
+function abrirLateral(abrir) {
+  document.body.classList.toggle('lateral-abierto', abrir);
+  $('#velo').hidden = !abrir;
+  $('#btn-menu').setAttribute('aria-expanded', String(abrir));
+}
+
+$('#btn-menu').addEventListener('click', () => abrirLateral(true));
+$('#btn-cerrar-lateral').addEventListener('click', () => abrirLateral(false));
+$('#velo').addEventListener('click', () => abrirLateral(false));
+
+/* ------------------------------------------------------------------- estado */
 
 async function cargarEstado() {
   try {
@@ -64,16 +76,6 @@ async function cargarEstado() {
 
     $('#version-app').textContent = 'v' + (d.version || '0.0.0');
 
-    if (!d.corpus?.listo) {
-      aviso('Sin corpus configurado. Abre Ajustes e indica la carpeta con el índice.', 'atencion');
-    } else if (!d.modelo?.vivo) {
-      aviso('No encuentro el servidor de modelos. Revisa la URL en Ajustes.', 'atencion');
-    } else {
-      const n = (d.corpus.vectores || 0).toLocaleString('es-CO');
-      aviso(`Listo · ${n} fragmentos indexados · ${d.modelo.modelo_activo || 'modelo local'}`, 'ok');
-      setTimeout(() => aviso(''), 4000);
-    }
-
     const aj = d.ajustes || {};
     $('#aj-corpus').value = aj.corpus_dir || '';
     $('#aj-url').value = aj.llm_url || '';
@@ -81,27 +83,60 @@ async function cargarEstado() {
     $('#aj-modelo').value = aj.llm_modelo || '';
     $('#aj-embed').value = aj.embed_modelo || '';
     $('#num-k').value = aj.fragmentos || 20;
+    $('#aj-maxtok').value = aj.max_tokens || 8000;
+    $('#aj-ctx').value = aj.contexto_maximo || 32000;
+    $('#aj-chars').value = aj.chars_por_fragmento || 4000;
 
-    if (d.corpus?.listo) cargarCatalogo();
+    // Voz
+    estado.hayVoz = !!(d.voz?.disponible && (d.voz.voces || []).length);
+    pintarVoces(d.voz, aj.voz_activa);
+    $('#btn-escuchar').classList.toggle('oculto', !estado.hayVoz);
+
+    if (!d.corpus?.listo) {
+      aviso('Sin corpus configurado. Abre Ajustes e indica la carpeta del índice.', 'atencion');
+    } else if (!d.modelo?.vivo) {
+      aviso('No encuentro el servidor de modelos. Revísalo en Ajustes.', 'atencion');
+    } else {
+      const n = (d.corpus.vectores || 0).toLocaleString('es-CO');
+      aviso(`Listo · ${n} fragmentos · ${d.modelo.modelo_activo || 'modelo local'}`, 'ok');
+      setTimeout(() => aviso(''), 4000);
+      cargarCatalogo();
+    }
   } catch {
     aviso('No puedo hablar con el servidor local.', 'error');
   }
+}
+
+function pintarVoces(voz, activa) {
+  const sel = $('#aj-voz');
+  const lista = voz?.voces || [];
+  sel.innerHTML = '<option value="">Sin lectura</option>' + lista.map((v) => {
+    const id = v.clave ?? v.id ?? v;
+    const nombre = v.nombre ?? id;
+    const desc = v.descripcion ? ` — ${v.descripcion}` : '';
+    return `<option value="${escapar(id)}">${escapar(nombre + desc)}</option>`;
+  }).join('');
+  if (activa) sel.value = activa;
+
+  $('#aviso-voz').textContent = voz?.disponible
+    ? (lista.length
+        ? 'Las voces se descargan aparte, no vienen en el instalador.'
+        : 'No hay voces instaladas. Ejecuta: python execution/instalar_voz.py --todas')
+    : (voz?.detalle || voz?.motivo || 'Síntesis de voz no disponible en este equipo.');
 }
 
 async function cargarCatalogo() {
   try {
     const r = await fetch('/api/catalogo');
     const d = await r.json();
-    const sel = $('#sel-sector');
-    sel.innerHTML = '<option value="">Todos los sectores</option>' +
+    $('#sel-sector').innerHTML = '<option value="">Todos los sectores</option>' +
       (d.sectores || []).map((s) => `<option value="${escapar(s)}">${escapar(s)}</option>`).join('');
   } catch { /* el catálogo es opcional */ }
 }
 
 $('#sel-sector').addEventListener('change', async (e) => {
-  const sector = e.target.value;
   try {
-    const r = await fetch('/api/catalogo?sector=' + encodeURIComponent(sector));
+    const r = await fetch('/api/catalogo?sector=' + encodeURIComponent(e.target.value));
     const d = await r.json();
     $('#sel-entidad').innerHTML = '<option value="">Todas las entidades</option>' +
       (d.entidades || []).map((x) => `<option value="${escapar(x)}">${escapar(x)}</option>`).join('');
@@ -117,6 +152,7 @@ $('#form-consulta').addEventListener('submit', (e) => {
 
 $$('.sugerencia').forEach((b) => b.addEventListener('click', () => {
   $('#pregunta').value = b.textContent;
+  $('#caja-sugerencias').open = false;
   preguntar(b.textContent);
 }));
 
@@ -124,9 +160,11 @@ function preguntar(texto) {
   if (!texto || estado.enCurso) return;
   estado.enCurso = true;
   estado.consultaActual = null;
+  abrirLateral(false);
 
   $('#zona-respuesta').classList.remove('oculto');
   $('#acciones').classList.add('oculto');
+  $('#reproductor').classList.add('oculto');
   $('#respuesta').innerHTML = '<p class="pensando">Buscando…</p>';
   $('#lista-fuentes').innerHTML = '';
   $('#num-fuentes').textContent = '';
@@ -146,9 +184,15 @@ function preguntar(texto) {
     if (!acumulado) $('#respuesta').innerHTML = `<p class="pensando">${escapar(JSON.parse(ev.data).t)}</p>`;
   });
 
+  fuente.addEventListener('aviso', (ev) => {
+    aviso(JSON.parse(ev.data).t, 'atencion');
+    setTimeout(() => aviso(''), 6000);
+  });
+
   fuente.addEventListener('fuentes', (ev) => {
-    const lista = JSON.parse(ev.data).lista || [];
-    $('#num-fuentes').textContent = `(${lista.length})`;
+    const d = JSON.parse(ev.data);
+    const lista = d.lista || [];
+    $('#num-fuentes').textContent = `(${lista.length}${d.tokens ? ` · ~${d.tokens.toLocaleString('es-CO')} tokens` : ''})`;
     $('#lista-fuentes').innerHTML = lista.map((f) => `
       <li>
         <strong>${escapar(f.entidad)}</strong>
@@ -199,20 +243,42 @@ async function cargarHistorial() {
     const lista = d.consultas || [];
     $('#lista-historial').innerHTML = lista.length
       ? lista.map((c) => `
-        <button class="item" data-id="${c.id}">
-          <div class="item-preg">${escapar(c.pregunta)}</div>
-          <div class="item-meta">
-            ${c.fijada ? '<span title="Fijada">📌</span>' : ''}
-            ${c.favorita ? '<span title="Favorita">★</span>' : ''}
-            <span>${fechaCorta(c.creada_en)}</span>
-            ${c.entidad ? `<span class="tenue">${escapar(c.entidad)}</span>` : ''}
-          </div>
-        </button>`).join('')
+        <div class="item-fila">
+          <button class="item" data-id="${c.id}">
+            <div class="item-preg">${escapar(c.pregunta)}</div>
+            <div class="item-meta">
+              ${c.fijada ? '<span title="Fijada">📌</span>' : ''}
+              ${c.favorita ? '<span title="Favorita">★</span>' : ''}
+              <span>${fechaCorta(c.creada_en)}</span>
+            </div>
+          </button>
+          <button class="borrar-item" data-borrar="${c.id}"
+                  title="Eliminar" aria-label="Eliminar consulta">✕</button>
+        </div>`).join('')
       : '<p class="vacio">Aún no hay consultas guardadas.</p>';
 
     $$('#lista-historial .item').forEach((b) =>
       b.addEventListener('click', () => abrirConsulta(b.dataset.id)));
+    $$('#lista-historial .borrar-item').forEach((b) =>
+      b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        borrarConsulta(b.dataset.borrar);
+      }));
   } catch { /* el historial es secundario */ }
+}
+
+async function borrarConsulta(id) {
+  if (!confirm('¿Eliminar esta consulta del historial?')) return;
+  try {
+    await fetch('/api/consulta/' + id, { method: 'DELETE' });
+    if (String(estado.consultaActual) === String(id)) {
+      estado.consultaActual = null;
+      $('#zona-respuesta').classList.add('oculto');
+    }
+    cargarHistorial();
+    aviso('Consulta eliminada.', 'ok');
+    setTimeout(() => aviso(''), 2000);
+  } catch { aviso('No pude eliminarla.', 'error'); }
 }
 
 async function abrirConsulta(id) {
@@ -224,6 +290,7 @@ async function abrirConsulta(id) {
     $('#zona-respuesta').classList.remove('oculto');
     $('#respuesta').innerHTML = markdown(d.respuesta);
     $('#acciones').classList.remove('oculto');
+    $('#reproductor').classList.add('oculto');
     $('#btn-favorita').textContent = d.favorita ? '★ Favorita' : '☆ Favorita';
     $('#btn-fijar').textContent = d.fijada ? 'Desfijar' : 'Fijar';
     const fuentes = d.fuentes || [];
@@ -233,6 +300,7 @@ async function abrirConsulta(id) {
         <strong>${escapar(f.entidad)}</strong>
         <div class="doc">${escapar(f.archivo)}${f.seccion ? ' · ' + escapar(f.seccion) : ''}</div>
       </li>`).join('');
+    abrirLateral(false);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   } catch { aviso('No pude abrir esa consulta.', 'error'); }
 }
@@ -253,6 +321,7 @@ $('#btn-nueva').addEventListener('click', () => {
   $('#pregunta').value = '';
   $('#zona-respuesta').classList.add('oculto');
   estado.consultaActual = null;
+  abrirLateral(false);
   $('#pregunta').focus();
 });
 
@@ -261,17 +330,32 @@ $('#btn-nueva').addEventListener('click', () => {
 $('#btn-favorita').addEventListener('click', async () => {
   if (!estado.consultaActual) return;
   const r = await fetch(`/api/consulta/${estado.consultaActual}/favorita`, { method: 'POST' });
-  const d = await r.json();
-  $('#btn-favorita').textContent = d.favorita ? '★ Favorita' : '☆ Favorita';
+  $('#btn-favorita').textContent = (await r.json()).favorita ? '★ Favorita' : '☆ Favorita';
   cargarHistorial();
 });
 
 $('#btn-fijar').addEventListener('click', async () => {
   if (!estado.consultaActual) return;
   const r = await fetch(`/api/consulta/${estado.consultaActual}/fijada`, { method: 'POST' });
-  const d = await r.json();
-  $('#btn-fijar').textContent = d.fijada ? 'Desfijar' : 'Fijar';
+  $('#btn-fijar').textContent = (await r.json()).fijada ? 'Desfijar' : 'Fijar';
   cargarHistorial();
+});
+
+$('#btn-escuchar').addEventListener('click', async () => {
+  if (!estado.consultaActual) return;
+  const audio = $('#reproductor');
+  $('#btn-escuchar').disabled = true;
+  $('#btn-escuchar').textContent = 'Generando…';
+  try {
+    audio.src = `/api/consulta/${estado.consultaActual}/audio`;
+    audio.classList.remove('oculto');
+    await audio.play();
+  } catch {
+    aviso('No pude generar el audio. Revisa la voz en Ajustes.', 'error');
+  } finally {
+    $('#btn-escuchar').disabled = false;
+    $('#btn-escuchar').textContent = '▶ Escuchar';
+  }
 });
 
 $('#btn-copiar').addEventListener('click', async () => {
@@ -286,35 +370,96 @@ $('#btn-exportar').addEventListener('click', () => {
   if (estado.consultaActual) location.href = `/api/consulta/${estado.consultaActual}/markdown`;
 });
 
+$('#btn-borrar').addEventListener('click', () => {
+  if (estado.consultaActual) borrarConsulta(estado.consultaActual);
+});
+
 /* --------------------------------------------------------------------- ajustes */
 
-$('#btn-ajustes').addEventListener('click', () => $('#dlg-ajustes').showModal());
+function abrirAjustes() { $('#dlg-ajustes').showModal(); }
+$('#btn-ajustes').addEventListener('click', abrirAjustes);
+$('#btn-ajustes-movil').addEventListener('click', abrirAjustes);
+
+/* Buscar modelos en el servidor, para no tener que escribirlos a mano */
+$('#btn-buscar-modelos').addEventListener('click', async () => {
+  $('#diag-ajustes').textContent = 'Buscando modelos…';
+  // Se guarda primero la URL y la clave: si no, se buscarían con los valores viejos.
+  await guardarAjustes(true);
+  try {
+    const r = await fetch('/api/modelos');
+    const d = await r.json();
+    if (!(d.todos || []).length) {
+      $('#diag-ajustes').textContent = 'El servidor no devolvió modelos. Revisa URL y clave.';
+      return;
+    }
+    const opciones = (lista) => '<option value="">— elegir —</option>' +
+      lista.map((m) => `<option value="${escapar(m)}">${escapar(m)}</option>`).join('');
+    $('#aj-modelo-sel').innerHTML = opciones(d.chat.length ? d.chat : d.todos);
+    $('#aj-embed-sel').innerHTML = opciones(d.embeddings.length ? d.embeddings : d.todos);
+    if ($('#aj-modelo').value) $('#aj-modelo-sel').value = $('#aj-modelo').value;
+    if ($('#aj-embed').value) $('#aj-embed-sel').value = $('#aj-embed').value;
+    $('#diag-ajustes').textContent =
+      `${d.todos.length} modelos encontrados (${d.chat.length} de chat, ${d.embeddings.length} de embeddings).`;
+  } catch {
+    $('#diag-ajustes').textContent = 'No pude consultar el servidor.';
+  }
+});
+
+$('#aj-modelo-sel').addEventListener('change', (e) => {
+  if (e.target.value) $('#aj-modelo').value = e.target.value;
+});
+$('#aj-embed-sel').addEventListener('change', (e) => {
+  if (e.target.value) $('#aj-embed').value = e.target.value;
+});
+
+$('#btn-probar').addEventListener('click', async () => {
+  $('#diag-ajustes').textContent = 'Probando…';
+  await guardarAjustes(true);
+  try {
+    const r = await fetch('/api/probar', { method: 'POST' });
+    const d = await r.json();
+    $('#diag-ajustes').textContent = (d.ok ? '✓ ' : '✗ ') + (d.detalle || '');
+    $('#diag-ajustes').className = 'diag ' + (d.ok ? 'ok' : 'error');
+  } catch {
+    $('#diag-ajustes').textContent = 'No pude probar la conexión.';
+  }
+});
+
+async function guardarAjustes(silencioso = false) {
+  const cuerpo = {
+    corpus_dir: $('#aj-corpus').value.trim(),
+    llm_url: $('#aj-url').value.trim(),
+    llm_api_key: $('#aj-clave').value,
+    llm_modelo: $('#aj-modelo').value.trim(),
+    embed_modelo: $('#aj-embed').value.trim(),
+    fragmentos: parseInt($('#num-k').value, 10) || 20,
+    max_tokens: parseInt($('#aj-maxtok').value, 10) || 8000,
+    contexto_maximo: parseInt($('#aj-ctx').value, 10) || 32000,
+    chars_por_fragmento: parseInt($('#aj-chars').value, 10) || 4000,
+    voz_activa: $('#aj-voz').value,
+  };
+  const r = await fetch('/api/ajustes', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(cuerpo),
+  });
+  const d = await r.json();
+  if (!silencioso) {
+    $('#diag-ajustes').className = 'diag';
+    $('#diag-ajustes').textContent = d.corpus?.listo
+      ? `Corpus cargado: ${(d.corpus.vectores || 0).toLocaleString('es-CO')} fragmentos.`
+      : 'Guardado, pero no encuentro el índice en esa carpeta.';
+    cargarEstado();
+  }
+  return d;
+}
 
 $('#form-ajustes').addEventListener('submit', async (e) => {
   if (e.submitter?.value !== 'guardar') return;
   e.preventDefault();
   $('#diag-ajustes').textContent = 'Guardando…';
-  try {
-    const r = await fetch('/api/ajustes', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        corpus_dir: $('#aj-corpus').value.trim(),
-        llm_url: $('#aj-url').value.trim(),
-        llm_api_key: $('#aj-clave').value,
-        llm_modelo: $('#aj-modelo').value.trim(),
-        embed_modelo: $('#aj-embed').value.trim(),
-        fragmentos: parseInt($('#num-k').value, 10) || 20,
-      }),
-    });
-    const d = await r.json();
-    $('#diag-ajustes').textContent = d.corpus?.listo
-      ? `Corpus cargado: ${(d.corpus.vectores || 0).toLocaleString('es-CO')} fragmentos.`
-      : 'Guardado, pero no encuentro el índice en esa carpeta.';
-    cargarEstado();
-  } catch {
-    $('#diag-ajustes').textContent = 'No pude guardar los ajustes.';
-  }
+  try { await guardarAjustes(); }
+  catch { $('#diag-ajustes').textContent = 'No pude guardar los ajustes.'; }
 });
 
 /* ---------------------------------------------------------------------- inicio */

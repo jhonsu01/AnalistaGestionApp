@@ -1,5 +1,14 @@
+# Servidor y utilidades
 starlette>=0.37
 uvicorn>=0.30
 anyio>=4.0
 numpy>=1.26
+
+# Indice vectorial comprimido: acelera la busqueda y ocupa ~7x menos memoria.
+# Si falta, el motor cae a numpy sin perder funcionalidad.
 turbovec>=0.8; platform_system != "Android"
+
+# Sintesis de voz (Piper ONNX). Las VOCES no se incluyen: se descargan con
+# `python execution/instalar_voz.py --todas` y quedan en la carpeta de datos
+# del usuario, nunca en el instalador ni en el repositorio.
+onnxruntime>=1.17

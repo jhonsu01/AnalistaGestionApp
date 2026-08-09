@@ -26,6 +26,15 @@ from starlette.staticfiles import StaticFiles
 
 from . import config, history, llm, rag
 
+# La voz es opcional: depende de onnxruntime y de que haya modelos descargados.
+# Si falta, la app funciona igual, solo sin lectura en voz alta.
+try:
+    from . import tts
+    VOZ_DISPONIBLE = True
+except Exception:  # noqa: BLE001
+    tts = None
+    VOZ_DISPONIBLE = False
+
 WEB = config.ROOT / "web"
 
 
@@ -46,16 +55,87 @@ async def vivo(request: Request) -> JSONResponse:
 
 
 async def estado(request: Request) -> JSONResponse:
+    voz = {"disponible": False, "voces": [], "motivo": "sin onnxruntime"}
+    if VOZ_DISPONIBLE:
+        try:
+            voz = {"disponible": True, **tts.estado_voz()}
+        except Exception as exc:  # noqa: BLE001
+            voz = {"disponible": False, "motivo": str(exc)[:120]}
+
     return JSONResponse(
         {
             "corpus": rag.estado(),
             "modelo": llm.diagnostico(),
             "historial": history.estadisticas(),
             "ajustes": config.leer_ajustes(),
+            "voz": voz,
             "version": (config.ROOT / "VERSION").read_text(encoding="utf-8").strip()
             if (config.ROOT / "VERSION").exists() else "0.0.0",
         }
     )
+
+
+async def listar_modelos(request: Request) -> JSONResponse:
+    """Modelos cargados en el servidor, para elegirlos sin escribirlos a mano."""
+    disponibles = llm.modelos()
+    # Los de embeddings se distinguen por el nombre; no es infalible pero
+    # acierta con los habituales (nomic, bge, e5, minilm, gte...).
+    patron = ("embed", "bge", "e5-", "minilm", "gte-", "nomic")
+    return JSONResponse(
+        {
+            "todos": disponibles,
+            "chat": [m for m in disponibles if not any(p in m.lower() for p in patron)],
+            "embeddings": [m for m in disponibles if any(p in m.lower() for p in patron)],
+        }
+    )
+
+
+async def probar(request: Request) -> JSONResponse:
+    """Prueba real de extremo a extremo antes de guardar los ajustes."""
+    return JSONResponse(await anyio.to_thread.run_sync(llm.probar_conexion))
+
+
+async def voces(request: Request) -> JSONResponse:
+    """Voces instaladas. Se descargan aparte: no viajan en el instalador."""
+    if not VOZ_DISPONIBLE:
+        return JSONResponse(
+            {"disponible": False, "voces": [],
+             "detalle": "Falta onnxruntime en este equipo."}
+        )
+    try:
+        return JSONResponse({"disponible": True, **tts.estado_voz()})
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"disponible": False, "voces": [], "detalle": str(exc)[:150]})
+
+
+async def audio(request: Request) -> Response:
+    """Lee en voz alta una respuesta guardada.
+
+    La sintesis va en un hilo aparte: Piper tarda segundos y bloquearia el
+    bucle de eventos, dejando la interfaz congelada mientras genera.
+    """
+    if not VOZ_DISPONIBLE:
+        return _error("La sintesis de voz no esta disponible en este equipo.", 503)
+
+    datos = history.obtener(int(request.path_params["cid"]))
+    if not datos:
+        return _error("No existe", 404)
+
+    voz = config.leer_ajustes().get("voz_activa") or ""
+    if not voz:
+        return _error("No hay ninguna voz seleccionada en Ajustes.", 400)
+
+    try:
+        wav = await anyio.to_thread.run_sync(
+            lambda: tts.sintetizar(datos["respuesta"], voz)
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _error(f"No se pudo generar el audio: {exc}", 500)
+
+    if not wav:
+        return _error("La voz no devolvio audio.", 500)
+
+    return Response(wav, media_type="audio/wav")
 
 
 async def guardar_ajustes(request: Request) -> JSONResponse:
@@ -116,6 +196,14 @@ async def consultar(request: Request) -> Response:
             yield _sse("error", {"detalle": "Sin resultados para esos filtros."})
             return
 
+        # Si el material no cabe en la ventana del modelo, se comprime ANTES de
+        # enviarlo. Descubrirlo por un error significaria perder la consulta.
+        chars = int(aj.get("chars_por_fragmento", config.CHARS_POR_FRAGMENTO))
+        tope = int(aj.get("contexto_maximo", config.CONTEXTO_MAXIMO))
+        fragmentos, tokens, nota = llm.comprimir(fragmentos, chars, tope)
+        if nota:
+            yield _sse("aviso", {"t": nota})
+
         fuentes = [
             {
                 "entidad": f["entidad"], "sector": f["sector"],
@@ -124,7 +212,7 @@ async def consultar(request: Request) -> Response:
             }
             for f in fragmentos
         ]
-        yield _sse("fuentes", {"lista": fuentes})
+        yield _sse("fuentes", {"lista": fuentes, "tokens": tokens})
         yield _sse("fase", {"t": "Redactando la respuesta..."})
 
         partes: list[str] = []
@@ -133,9 +221,7 @@ async def consultar(request: Request) -> Response:
 
         def producir() -> None:
             try:
-                for trozo in llm.responder_stream(
-                    pregunta, fragmentos, int(aj.get("chars_por_fragmento", config.CHARS_POR_FRAGMENTO))
-                ):
+                for trozo in llm.responder_stream(pregunta, fragmentos, chars):
                     cola.append(trozo)
             except Exception as exc:  # noqa: BLE001
                 cola.append(f"\n\n[Error del modelo: {exc}]")
@@ -220,6 +306,52 @@ async def borrar(request: Request) -> JSONResponse:
 
 
 # --------------------------------------------------------------------------
+# Lectura en voz alta
+# --------------------------------------------------------------------------
+async def voces(request: Request) -> JSONResponse:
+    if not VOZ_DISPONIBLE:
+        return JSONResponse(
+            {"disponible": False, "voces": [],
+             "detalle": "Falta onnxruntime. Instálalo para activar la lectura."}
+        )
+    try:
+        return JSONResponse({"disponible": True, **tts.estado_voz()})
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"disponible": False, "detalle": str(exc)[:150]})
+
+
+async def audio(request: Request) -> Response:
+    """Devuelve un WAV con la respuesta leida en voz alta."""
+    if not VOZ_DISPONIBLE:
+        return _error("La síntesis de voz no está disponible", 503)
+
+    datos = history.obtener(int(request.path_params["cid"]))
+    if not datos:
+        return _error("No existe", 404)
+
+    aj = config.leer_ajustes()
+    voz = request.query_params.get("voz") or aj.get("voz_activa") or ""
+    if not voz:
+        return _error("No hay ninguna voz seleccionada. Elige una en Ajustes.", 400)
+
+    try:
+        wav = await anyio.to_thread.run_sync(
+            lambda: tts.sintetizar(datos["respuesta"], voz)
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _error(f"No se pudo sintetizar: {str(exc)[:150]}", 500)
+
+    if not wav:
+        return _error("La síntesis no devolvió audio", 500)
+
+    return Response(
+        wav,
+        media_type="audio/wav",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+# --------------------------------------------------------------------------
 # Web
 # --------------------------------------------------------------------------
 async def raiz(request: Request) -> Response:
@@ -235,11 +367,15 @@ def crear_app() -> Starlette:
         Route("/api/vivo", vivo),
         Route("/api/estado", estado),
         Route("/api/ajustes", guardar_ajustes, methods=["POST"]),
+        Route("/api/modelos", listar_modelos),
+        Route("/api/probar", probar, methods=["POST"]),
+        Route("/api/voces", voces),
         Route("/api/catalogo", catalogo),
         Route("/api/consultar", consultar),
         Route("/api/historial", historial),
         Route("/api/consulta/{cid:int}", ver_consulta),
         Route("/api/consulta/{cid:int}/markdown", exportar),
+        Route("/api/consulta/{cid:int}/audio", audio),
         Route("/api/consulta/{cid:int}/favorita", favorita, methods=["POST"]),
         Route("/api/consulta/{cid:int}/fijada", fijada, methods=["POST"]),
         Route("/api/consulta/{cid:int}", borrar, methods=["DELETE"]),

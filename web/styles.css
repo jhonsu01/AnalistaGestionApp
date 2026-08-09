@@ -336,26 +336,157 @@ dialog small { display: block; margin-top: .25rem; font-size: .75rem; }
 dialog menu { display: flex; justify-content: flex-end; gap: .5rem; padding: 0; margin: 1rem 0 0; }
 .diag { font-size: .82rem; color: var(--acento); min-height: 1.2em; }
 
+/* ------------------------------------------------- elementos de interfaz */
+
+.icono {
+  background: transparent;
+  border: none;
+  color: var(--texto);
+  font-size: 1.3rem;
+  line-height: 1;
+  padding: .35rem .5rem;
+  border-radius: var(--radio);
+}
+
+.icono:hover { background: var(--panel-alto); }
+
+.cab-acciones { display: flex; align-items: center; gap: .4rem; }
+
+.peligro { border-color: transparent; }
+.peligro:hover { color: var(--error); border-color: var(--error); }
+
+.fila { display: flex; gap: .4rem; align-items: center; }
+.fila input { flex: 1; }
+
+.diag.ok { color: var(--ok); }
+.diag.error { color: var(--error); }
+
+/* Secciones plegables: en móvil evitan que filtros y ejemplos se coman la
+   pantalla antes de que el usuario haya escrito nada. */
+.plegable {
+  margin-top: .75rem;
+  border: 1px solid var(--borde);
+  border-radius: var(--radio);
+  background: var(--panel);
+  overflow: hidden;
+}
+
+.plegable > summary {
+  cursor: pointer;
+  padding: .6rem .9rem;
+  font-size: .85rem;
+  color: var(--tenue);
+  user-select: none;
+}
+
+.plegable > summary:hover { color: var(--texto); }
+.plegable[open] > summary { border-bottom: 1px solid var(--borde); }
+.plegable > *:not(summary) { padding: .8rem .9rem; }
+.plegable .filtros,
+.plegable .sugerencias { margin: 0; }
+
+dialog .plegable { background: var(--fondo); margin-bottom: 1rem; }
+dialog .plegable label { margin-bottom: .8rem; }
+dialog .plegable label:last-child { margin-bottom: 0; }
+
+dialog select {
+  width: 100%;
+  margin-top: .3rem;
+  padding: .5rem .7rem;
+  background: var(--fondo);
+  border: 1px solid var(--borde);
+  border-radius: var(--radio);
+  color: var(--texto);
+  font-size: .9rem;
+}
+
+/* Fila del historial: la consulta y su botón de eliminar */
+.item-fila { display: flex; align-items: stretch; gap: .2rem; }
+.item-fila .item { flex: 1; margin-bottom: 0; }
+
+.borrar-item {
+  background: transparent;
+  border: none;
+  color: transparent;
+  padding: 0 .5rem;
+  border-radius: var(--radio);
+  font-size: .9rem;
+}
+
+.item-fila:hover .borrar-item { color: var(--tenue); }
+.borrar-item:hover { color: var(--error); background: var(--panel-alto); }
+
+#reproductor { width: 100%; margin-top: .75rem; }
+
+/* Barra superior y velo: solo existen en móvil */
+#barra-movil { display: none; }
+#velo { display: none; }
+.solo-movil { display: none; }
+
 /* ------------------------------------------------------------------- móvil */
 
 @media (max-width: 820px) {
-  body { flex-direction: column; }
+  body { display: block; }
 
-  #lateral {
-    width: 100%;
-    height: auto;
-    max-height: 42vh;
-    position: static;
-    border-right: none;
+  #barra-movil {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: .5rem;
+    padding: .5rem .75rem;
+    padding-top: calc(.5rem + env(safe-area-inset-top, 0px));
+    background: var(--panel);
     border-bottom: 1px solid var(--borde);
+    position: sticky;
+    top: 0;
+    z-index: 30;
   }
 
-  #principal { padding: 1rem; padding-bottom: 3rem; }
+  .titulo-movil { font-weight: 600; font-size: .95rem; }
+  .solo-movil { display: inline-flex; }
+
+  /* El historial pasa a ser un cajón lateral: no ocupa sitio hasta que se pide */
+  #lateral {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: min(86vw, 340px);
+    height: 100vh;
+    z-index: 50;
+    transform: translateX(-100%);
+    transition: transform .22s ease;
+    border-right: 1px solid var(--borde);
+  }
+
+  body.lateral-abierto #lateral { transform: translateX(0); }
+
+  #velo {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, .55);
+    z-index: 40;
+  }
+
+  #principal {
+    padding: 1rem;
+    padding-bottom: calc(2rem + env(safe-area-inset-bottom, 0px));
+    max-width: 100%;
+  }
+
+  .filtros { flex-direction: column; align-items: stretch; }
   .filtros select { min-width: 100%; }
-  .acciones button { flex: 1 1 45%; }
+  .fragmentos { justify-content: space-between; }
+  .acciones button { flex: 1 1 calc(50% - .5rem); }
+
+  /* En móvil el botón de borrar siempre visible: no hay hover */
+  .borrar-item { color: var(--tenue); }
+
+  #pregunta { font-size: 16px; }   /* menos de 16px hace que iOS haga zoom */
 }
 
-/* Respeta el notch de los móviles */
-@supports (padding: env(safe-area-inset-bottom)) {
-  #principal { padding-bottom: calc(3rem + env(safe-area-inset-bottom)); }
+@media (min-width: 821px) {
+  /* En escritorio el cajón es una columna fija y el velo no existe */
+  #velo { display: none !important; }
 }

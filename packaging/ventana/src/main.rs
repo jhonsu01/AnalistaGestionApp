@@ -80,7 +80,11 @@ fn arrancar_servidor(raiz: &Path) -> Option<Child> {
         // No perdemos nada: nuestro unico calculo es un producto escalar de
         // 6886x384, que en un hilo tarda milisegundos.
         .env("OPENBLAS_NUM_THREADS", "1")
-        .env("OMP_NUM_THREADS", "1");
+        .env("OMP_NUM_THREADS", "1")
+        // Esta ventana YA muestra la interfaz. Sin esta marca el servidor
+        // abria ademas el navegador y el usuario acababa con la aplicacion
+        // duplicada: una en su ventana y otra en una pestana suelta.
+        .env("ANALISTA_VENTANA", "1");
 
     // Al servidor le damos SIEMPRE un stdout y un stderr de verdad. Lanzado
     // desde un acceso directo no hay consola que heredar, y uvicorn llama a

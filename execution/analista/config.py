@@ -41,15 +41,25 @@ LLM_URL_DEFECTO = "http://localhost:1234/v1"
 LLM_MODELO_DEFECTO = ""      # vacio = autodetectar el que este cargado
 EMBED_MODELO_DEFECTO = "text-embedding-nomic-embed-text-v1.5"
 
-# El modelo razona antes de responder y ese razonamiento gasta del mismo cupo:
-# con un tope bajo devuelve contenido VACIO sin ningun error. Ver llm.py.
-MAX_TOKENS = 3500
+# El modelo razona antes de responder y ese razonamiento gasta del MISMO cupo
+# que la respuesta. Con 20 fragmentos el razonamiento se dispara y un tope de
+# 3.500 se agotaba antes de escribir nada: la API devolvia contenido VACIO sin
+# error alguno. Con holgura eso deja de pasar. Ver llm.py.
+MAX_TOKENS = 8000
 TEMPERATURA = 0.2            # baja: fidelidad al documento, no creatividad
+
+# Ventana de contexto del modelo. gemma-4-26b admite 262.144; se deja un valor
+# prudente y el usuario puede subirlo en Ajustes si su modelo da para mas.
+CONTEXTO_MAXIMO = 32000      # tokens de ENTRADA que se consideran seguros
 
 # Recuperacion
 FRAGMENTOS = 20              # cuantos trozos se pasan al modelo
 CHARS_POR_FRAGMENTO = 4000
 MAX_POR_DOCUMENTO = 2        # evita que un solo archivo copie toda la respuesta
+
+# Aproximacion para espanol: ~4 caracteres por token. Sirve para saber si el
+# contexto cabe ANTES de enviarlo, en vez de descubrirlo por un error.
+CHARS_POR_TOKEN = 4
 
 
 def asegurar_dirs() -> None:
@@ -67,7 +77,18 @@ _DEFECTOS = {
     "embed_modelo": EMBED_MODELO_DEFECTO,
     "fragmentos": FRAGMENTOS,
     "max_por_documento": MAX_POR_DOCUMENTO,
+    "max_tokens": MAX_TOKENS,
+    "contexto_maximo": CONTEXTO_MAXIMO,
+    "chars_por_fragmento": CHARS_POR_FRAGMENTO,
+    # Voz
+    "voz_activa": "",            # vacio = sin lectura en voz alta
+    "voz_velocidad": 1.0,
 }
+
+# --------------------------------------------------------------------------
+# Voces (Piper ONNX). Se descargan aparte: NO viajan en el instalador.
+# --------------------------------------------------------------------------
+VOCES_DIR = DATOS / "voces"
 
 
 def leer_ajustes() -> dict:

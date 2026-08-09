@@ -10,10 +10,20 @@
 </head>
 <body>
 
-<aside id="lateral">
+<!-- Barra superior: solo se ve en móvil, para abrir el historial -->
+<header id="barra-movil">
+  <button id="btn-menu" class="icono" aria-label="Abrir historial" aria-expanded="false">☰</button>
+  <span class="titulo-movil">Analista de Gestión</span>
+  <button id="btn-ajustes-movil" class="icono" aria-label="Ajustes">⚙</button>
+</header>
+
+<aside id="lateral" aria-label="Historial">
   <header class="lateral-cab">
     <h1>Consultas</h1>
-    <button id="btn-nueva" class="primario" title="Nueva consulta">+ Nueva</button>
+    <div class="cab-acciones">
+      <button id="btn-nueva" class="primario">+ Nueva</button>
+      <button id="btn-cerrar-lateral" class="icono solo-movil" aria-label="Cerrar">✕</button>
+    </div>
   </header>
 
   <div class="buscador">
@@ -27,7 +37,7 @@
     <button class="chip" data-filtro="favoritas">Favoritas</button>
   </div>
 
-  <nav id="lista-historial" aria-label="Historial de consultas"></nav>
+  <nav id="lista-historial"></nav>
 
   <footer class="lateral-pie">
     <button id="btn-ajustes" class="plano">Ajustes</button>
@@ -35,36 +45,45 @@
   </footer>
 </aside>
 
+<div id="velo" hidden></div>
+
 <main id="principal">
   <div id="barra-estado" class="aviso oculto" role="status"></div>
 
   <section id="zona-consulta">
-    <div class="filtros">
-      <select id="sel-sector" aria-label="Filtrar por sector">
-        <option value="">Todos los sectores</option>
-      </select>
-      <select id="sel-entidad" aria-label="Filtrar por entidad">
-        <option value="">Todas las entidades</option>
-      </select>
-      <label class="fragmentos">
-        Fragmentos
-        <input id="num-k" type="number" min="4" max="60" value="20" aria-label="Número de fragmentos">
-      </label>
-    </div>
-
     <form id="form-consulta" autocomplete="off">
       <textarea id="pregunta" rows="3" required
-        placeholder="¿Qué quieres saber? Por ejemplo: ¿qué reportó el ICBF sobre primera infancia?"
+        placeholder="¿Qué quieres saber? Por ejemplo: ¿cuánto ejecutó el ICBF en 2024?"
         aria-label="Tu pregunta"></textarea>
       <button type="submit" id="btn-preguntar" class="primario grande">Consultar</button>
     </form>
 
-    <div id="sugerencias" class="sugerencias">
-      <button class="sugerencia">¿Qué reportó el ICBF sobre primera infancia?</button>
-      <button class="sugerencia">Estado de la red vial según INVÍAS</button>
-      <button class="sugerencia">Principales riesgos financieros reportados</button>
-      <button class="sugerencia">¿Qué proyectos quedaron pendientes en Minas y Energía?</button>
-    </div>
+    <!-- Filtros y sugerencias plegados: en móvil no deben comerse la pantalla -->
+    <details id="caja-filtros" class="plegable">
+      <summary>Filtros y opciones</summary>
+      <div class="filtros">
+        <select id="sel-sector" aria-label="Filtrar por sector">
+          <option value="">Todos los sectores</option>
+        </select>
+        <select id="sel-entidad" aria-label="Filtrar por entidad">
+          <option value="">Todas las entidades</option>
+        </select>
+        <label class="fragmentos">
+          Fragmentos
+          <input id="num-k" type="number" min="4" max="60" value="20">
+        </label>
+      </div>
+    </details>
+
+    <details id="caja-sugerencias" class="plegable">
+      <summary>Ejemplos de consulta</summary>
+      <div class="sugerencias">
+        <button class="sugerencia">¿Cuánto ejecutó el ICBF y en qué?</button>
+        <button class="sugerencia">Gastos de funcionamiento del Ministerio de Hacienda</button>
+        <button class="sugerencia">Estado de la red vial según INVÍAS</button>
+        <button class="sugerencia">Proyectos pendientes en Minas y Energía</button>
+      </div>
+    </details>
   </section>
 
   <section id="zona-respuesta" class="oculto">
@@ -73,9 +92,13 @@
     <div id="acciones" class="acciones oculto">
       <button id="btn-favorita" class="plano">☆ Favorita</button>
       <button id="btn-fijar" class="plano">Fijar</button>
+      <button id="btn-escuchar" class="plano oculto">▶ Escuchar</button>
       <button id="btn-copiar" class="plano">Copiar</button>
-      <button id="btn-exportar" class="plano">Exportar .md</button>
+      <button id="btn-exportar" class="plano">Exportar</button>
+      <button id="btn-borrar" class="plano peligro">Eliminar</button>
     </div>
+
+    <audio id="reproductor" class="oculto" controls preload="none"></audio>
 
     <details id="caja-fuentes" class="fuentes">
       <summary>Fuentes <span id="num-fuentes"></span></summary>
@@ -95,7 +118,10 @@
     </label>
 
     <label>Servidor de modelos
-      <input id="aj-url" type="text" placeholder="http://localhost:1234/v1" spellcheck="false">
+      <div class="fila">
+        <input id="aj-url" type="text" placeholder="http://localhost:1234/v1" spellcheck="false">
+        <button type="button" id="btn-buscar-modelos" class="plano">Buscar</button>
+      </div>
       <small>LM Studio, Ollama o llama-server (API compatible con OpenAI).</small>
     </label>
 
@@ -104,18 +130,45 @@
     </label>
 
     <label>Modelo de respuesta
-      <input id="aj-modelo" type="text" placeholder="vacío = autodetectar" spellcheck="false">
+      <select id="aj-modelo-sel"><option value="">— pulsa Buscar —</option></select>
+      <input id="aj-modelo" type="text" placeholder="o escríbelo a mano" spellcheck="false">
     </label>
 
     <label>Modelo de embeddings
+      <select id="aj-embed-sel"><option value="">— pulsa Buscar —</option></select>
       <input id="aj-embed" type="text" spellcheck="false">
       <small>Debe ser el MISMO con el que se generó el índice.</small>
     </label>
+
+    <details class="plegable">
+      <summary>Contexto y rendimiento</summary>
+      <label>Tokens de respuesta
+        <input id="aj-maxtok" type="number" min="1000" max="60000" step="500">
+        <small>El modelo razona antes de responder y gasta de aquí. Si responde
+        vacío, súbelo.</small>
+      </label>
+      <label>Contexto máximo de entrada (tokens)
+        <input id="aj-ctx" type="number" min="4000" max="250000" step="1000">
+        <small>Si los fragmentos no caben, se comprimen automáticamente.</small>
+      </label>
+      <label>Caracteres por fragmento
+        <input id="aj-chars" type="number" min="500" max="12000" step="500">
+      </label>
+    </details>
+
+    <details class="plegable">
+      <summary>Lectura en voz alta</summary>
+      <label>Voz
+        <select id="aj-voz"><option value="">Sin lectura</option></select>
+        <small id="aviso-voz">Las voces se descargan aparte, no vienen en el instalador.</small>
+      </label>
+    </details>
 
     <div id="diag-ajustes" class="diag"></div>
 
     <menu>
       <button value="cancel" class="plano">Cerrar</button>
+      <button type="button" id="btn-probar" class="plano">Probar conexión</button>
       <button value="guardar" id="btn-guardar-ajustes" class="primario">Guardar</button>
     </menu>
   </form>

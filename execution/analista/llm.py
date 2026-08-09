@@ -122,15 +122,67 @@ def _prompt(pregunta: str, fragmentos: list[dict], chars: int) -> str:
     )
 
 
+def comprimir(
+    fragmentos: list[dict], chars: int, tope_tokens: int
+) -> tuple[list[dict], int, str]:
+    """Ajusta los fragmentos para que quepan en la ventana de contexto.
+
+    Antes de enviar nada se estima cuanto ocupa el material. Si se pasa del
+    tope, se comprime en dos escalones en vez de fallar:
+
+      1. RECORTAR cada fragmento (menos texto por documento, mismos documentos)
+      2. si aun no cabe, DESCARTAR los fragmentos menos parecidos
+
+    Se recorta antes de descartar porque conservar muchas fuentes distintas da
+    mejores respuestas que conservar pocas muy largas.
+    """
+    if not fragmentos:
+        return fragmentos, 0, ""
+
+    def coste(lista: list[dict], corte: int) -> int:
+        total = sum(min(len(f.get("texto") or ""), corte) + 120 for f in lista)
+        return total // config.CHARS_POR_TOKEN
+
+    actual = coste(fragmentos, chars)
+    if actual <= tope_tokens:
+        return fragmentos, actual, ""
+
+    # 1) Recortar el texto de cada fragmento
+    for nuevo_corte in (3000, 2200, 1500, 1000, 700):
+        if nuevo_corte >= chars:
+            continue
+        if coste(fragmentos, nuevo_corte) <= tope_tokens:
+            return (
+                fragmentos,
+                coste(fragmentos, nuevo_corte),
+                f"contexto comprimido: {chars} → {nuevo_corte} caracteres por fragmento",
+            )
+        chars_final = nuevo_corte
+
+    # 2) Descartar los menos relevantes, manteniendo el recorte minimo
+    corte = 700
+    recortados = list(fragmentos)
+    while len(recortados) > 3 and coste(recortados, corte) > tope_tokens:
+        recortados.pop()  # vienen ordenados por similitud descendente
+    return (
+        recortados,
+        coste(recortados, corte),
+        f"contexto comprimido: {len(fragmentos)} → {len(recortados)} fragmentos "
+        f"y {corte} caracteres cada uno",
+    )
+
+
 def responder_stream(
     pregunta: str, fragmentos: list[dict], chars: int = 4000
 ) -> Iterator[str]:
     """Emite la respuesta por trozos, para que se vea escribirse en pantalla.
 
     OJO CON max_tokens: los modelos tipo gemma razonan antes de responder y ese
-    razonamiento gasta del MISMO cupo (~1.200 tokens). Si se agota, la API
-    devuelve contenido VACIO con finish_reason "length" y ningun error, y
-    parece que el modelo no contesto. Por eso se pide con holgura.
+    razonamiento gasta del MISMO cupo. Con 20 fragmentos el razonamiento se
+    alarga y un tope de 3.500 se agotaba antes de escribir una sola palabra:
+    la API devolvia contenido VACIO con finish_reason "length" y sin error, de
+    modo que parecia que el corpus no tenia la informacion. Por eso el cupo va
+    holgado y es configurable.
     """
     aj = _ajustes()
     url = (aj.get("llm_url") or config.LLM_URL_DEFECTO).rstrip("/")
@@ -147,7 +199,7 @@ def responder_stream(
                 {"role": "user", "content": _prompt(pregunta, fragmentos, chars)},
             ],
             "temperature": config.TEMPERATURA,
-            "max_tokens": config.MAX_TOKENS,
+            "max_tokens": int(aj.get("max_tokens") or config.MAX_TOKENS),
             "stream": True,
         }
     ).encode("utf-8")
@@ -180,8 +232,79 @@ def responder_stream(
 
     if not emitido:
         # Sintoma tipico de cupo agotado por el razonamiento interno.
+        cupo = int(aj.get("max_tokens") or config.MAX_TOKENS)
         yield (
-            "El modelo no devolvio texto. Suele deberse a que agoto su cupo de "
-            "tokens razonando antes de responder: prueba con menos fragmentos "
-            "o revisa que el modelo cargado admita el contexto solicitado."
+            f"El modelo no devolvió texto (cupo actual: {cupo} tokens de salida).\n\n"
+            "Casi siempre es porque agotó ese cupo razonando antes de escribir. "
+            "No significa que el corpus no tenga la información.\n\n"
+            "Qué probar, en este orden:\n"
+            "- Subir **Tokens de respuesta** en Ajustes (16000 suele bastar).\n"
+            "- Reducir **Fragmentos** a 8 o 10.\n"
+            "- Comprobar en Ajustes que el modelo cargado sea el correcto."
         )
+
+
+def probar_conexion() -> dict:
+    """Comprueba de verdad que el servidor responde y que el modelo contesta.
+
+    No basta con listar modelos: LM Studio puede listar uno que luego falla al
+    generar. Aqui se le pide una respuesta minima de verdad.
+    """
+    aj = _ajustes()
+    disponibles = modelos()
+    if not disponibles:
+        return {
+            "ok": False,
+            "detalle": "El servidor no responde. Revisa la URL y, si tu servidor "
+                       "exige clave, que la clave sea correcta.",
+        }
+
+    modelo = aj.get("llm_modelo") or disponibles[0]
+    if modelo not in disponibles:
+        return {
+            "ok": False,
+            "modelos": disponibles,
+            "detalle": f"El modelo '{modelo}' no está cargado en el servidor.",
+        }
+
+    # 1) El modelo de chat responde
+    try:
+        datos = _pedir(
+            "/chat/completions",
+            {
+                "model": modelo,
+                "messages": [{"role": "user", "content": "Responde solo: listo"}],
+                "max_tokens": 2000,
+                "temperature": 0,
+            },
+            timeout=120,
+        )
+        contenido = (datos["choices"][0]["message"].get("content") or "").strip()
+        if not contenido:
+            return {
+                "ok": False,
+                "modelos": disponibles,
+                "detalle": "El modelo respondió vacío: agota su cupo razonando. "
+                           "Sube 'Tokens de respuesta'.",
+            }
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "modelos": disponibles,
+                "detalle": f"El modelo no respondió: {str(exc)[:120]}"}
+
+    # 2) El modelo de embeddings responde y con cuantas dimensiones
+    vector = embeder("prueba")
+    if vector is None:
+        return {
+            "ok": False,
+            "modelos": disponibles,
+            "detalle": f"El modelo de embeddings '{aj.get('embed_modelo')}' no responde. "
+                       "Cárgalo en el servidor o corrige su nombre.",
+        }
+
+    return {
+        "ok": True,
+        "modelos": disponibles,
+        "detalle": f"Todo correcto. Chat: {modelo}. "
+                   f"Embeddings: {len(vector)} dimensiones.",
+        "dimensiones": len(vector),
+    }

@@ -65,7 +65,13 @@ def main() -> int:
     print(f"  Datos          : {config.DATOS}")
     print("=" * 62)
 
-    if os.environ.get("ANALISTA_SIN_NAVEGADOR") != "1":
+    # El navegador SOLO se abre si nadie mas va a mostrar la interfaz. Cuando
+    # arranca desde la aplicacion de escritorio, la ventana propia ya carga la
+    # pagina y abrir ademas el navegador dejaba dos copias de la app abiertas.
+    # `Analista.exe` marca ANALISTA_VENTANA=1 al lanzar este proceso.
+    lanzado_por_la_app = os.environ.get("ANALISTA_VENTANA") == "1"
+    sin_navegador = os.environ.get("ANALISTA_SIN_NAVEGADOR") == "1"
+    if not lanzado_por_la_app and not sin_navegador:
         threading.Timer(1.2, lambda: webbrowser.open(url)).start()
 
     uvicorn.run(
