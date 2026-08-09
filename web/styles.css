@@ -476,11 +476,20 @@ dialog select {
     height: 100vh;
     z-index: 50;
     transform: translateX(-100%);
+    /* Cerrado, el cajón no debe existir para el dedo. Sale de la pantalla con
+       un transform, y un transform mal recalculado (el WebView redimensiona al
+       arrancar y al girar el móvil) dejaría un panel a pantalla completa con
+       z-index 50 comiéndose todos los toques. Con esto, aunque el transform
+       falle, la pantalla sigue respondiendo. */
+    pointer-events: none;
     transition: transform .22s ease;
     border-right: 1px solid var(--borde);
   }
 
-  body.lateral-abierto #lateral { transform: translateX(0); }
+  body.lateral-abierto #lateral {
+    transform: translateX(0);
+    pointer-events: auto;
+  }
 
   /* El velo SOLO existe mientras el cajón está abierto.
      Antes esta regla ponía `display: block` a secas y el atributo `hidden` del
@@ -508,7 +517,19 @@ dialog select {
 
   .filtros { flex-direction: column; align-items: stretch; }
   .filtros select { min-width: 100%; }
-  .fragmentos { justify-content: space-between; }
+
+  /* El campo se confundía con el panel: mismo fondo, borde tenue y 70px de
+     ancho pegados al margen. Aquí se le da tamaño de dedo y contraste propio,
+     que además es el mínimo cómodo para tocarlo. */
+  .fragmentos { justify-content: space-between; gap: 1rem; }
+  .fragmentos input {
+    width: 5.5rem;
+    padding: .6rem;
+    text-align: center;
+    font-size: 16px;              /* menos de 16px hace que iOS haga zoom */
+    background: var(--fondo);
+    border-color: var(--acento);
+  }
   .acciones button { flex: 1 1 calc(50% - .5rem); }
 
   /* En móvil el botón de borrar siempre visible: no hay hover */
